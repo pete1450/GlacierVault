@@ -1,0 +1,38 @@
+services:
+  glaciervault:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    image: glaciervault:latest
+    container_name: glaciervault
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    volumes:
+      # Persistent data — survive container restarts/upgrades.
+      - glaciervault-config:/config
+      - glaciervault-database:/database
+      - glaciervault-cache:/cache
+      - glaciervault-logs:/logs
+      - /home/dev/backuptest:/backuptest
+      # ── Backup source mounts ──────────────────────────────────────────────
+      # Add your host paths below. The container paths must match what you
+      # configure in GlacierVault's UI as source paths.
+      #
+      # Example:
+      #   - /home:/mnt/home:ro
+      #   - /srv/media:/mnt/media:ro
+      #   - /var/lib/docker/volumes:/mnt/docker-volumes:ro
+    environment:
+      # Set your initial login password here (or change it after first boot).
+      - INITIAL_PASSWORD=changeme
+      # Optional: override config/database locations.
+      # - CONFIG_DIR=/config
+      # - DATABASE_PATH=/database/glaciervault.db
+      # - LISTEN_ADDR=:8080
+
+volumes:
+  glaciervault-config:
+  glaciervault-database:
+  glaciervault-cache:
+  glaciervault-logs:
