@@ -8,10 +8,10 @@ The goal is to make AWS Deep Archive as simple as possible to non-AWS experts: y
 
 ## THIS VERY MUCH A WORK-IN-PROGRESS REPO!
  - Currently the CDK does create resources and scheduled backups do seem to work. This is after a couple iterations with Copilot and pile of debugging. It ain't vibe-coding, but it's not far off at this point.
- - Effort at a robust design was taken but very little of the output has been verified.]
+ - Effort at a robust design was taken but very little of the output has been verified.
  - Heck who knows if a lot of the claimed features in the README below this exist but as a whole it's there.
- - Snapshots aren't being listed and thereforce restore hasn't been tested
- - Do not use rely on this project for your real backups yet!
+ - Snapshots aren't being listed and therefore restore hasn't been tested
+ - Do not rely on this project for your real backups yet!
 I'd be very open to PRs if anyone wants to dig in.
 
 <img width="934" height="555" alt="image" src="https://github.com/user-attachments/assets/ea0e41c0-9c51-4071-b240-ac97daf67864" />
