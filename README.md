@@ -1,7 +1,13 @@
 # GlacierVault
 
 A self-hosted backup appliance that provides a simple web UI for scheduling and operating AWS Glacier Deep Archive backups. Built on [Rustic](https://github.com/rustic-rs/rustic) and the [rustic-aws glacier-cold-storage-cdk](https://github.com/rustic-rs/rustic-aws/tree/main/glacier-cold-storage-cdk) infrastructure project.
-
+Thought process
+ - Deep archive is dirt-cheap but retrieval can be a pain
+ - Bulk retrieval is free
+ - 100GB per month egress is free
+ - PUT/GET request are the only thing that needs to be managed intelligently (still need to be optimized in this app)
+ - Warmup process takes a while
+ - Wouldn't it be nice to have this all in a single app
 The goal is to make AWS Deep Archive as simple as possible to non-AWS experts: you bring credentials, GlacierVault handles the rest.
 
 ---
