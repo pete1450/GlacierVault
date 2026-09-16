@@ -1,14 +1,20 @@
 'use client'
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
-import { listJobs, listBackups, listSnapshots, type Job, type BackupDef, type Snapshot } from '@/lib/api'
+import { useRouter } from 'next/navigation'
+import Nav from '@/components/Nav'
+import { listJobs, listBackups, listSnapshots, getSetupStatus, type Job, type BackupDef, type Snapshot } from '@/lib/api'
 
 export default function Dashboard() {
+  const router = useRouter()
   const [jobs, setJobs] = useState<Job[]>([])
   const [backups, setBackups] = useState<BackupDef[]>([])
   const [snapshots, setSnapshots] = useState<Snapshot[]>([])
 
   useEffect(() => {
+    getSetupStatus().then(s => {
+      if (!s.setupComplete) router.push('/setup')
+    }).catch(() => {})
     listJobs(5).then(setJobs).catch(() => {})
     listBackups().then(setBackups).catch(() => {})
     listSnapshots().then(setSnapshots).catch(() => {})
@@ -19,17 +25,7 @@ export default function Dashboard() {
 
   return (
     <div className="min-h-screen bg-gray-950 text-white">
-      <nav className="border-b border-gray-800 px-6 py-4 flex items-center justify-between">
-        <span className="font-bold text-lg">GlacierVault</span>
-        <div className="flex gap-4 text-sm text-gray-400">
-          <Link href="/" className="text-white">Dashboard</Link>
-          <Link href="/backups">Backups</Link>
-          <Link href="/snapshots">Snapshots</Link>
-          <Link href="/restore">Restore</Link>
-          <Link href="/jobs">Jobs</Link>
-          <Link href="/settings">Settings</Link>
-        </div>
-      </nav>
+      <Nav />
       <main className="max-w-6xl mx-auto px-6 py-8 space-y-6">
         <h1 className="text-2xl font-bold">Dashboard</h1>
         <div className="grid grid-cols-3 gap-4">
