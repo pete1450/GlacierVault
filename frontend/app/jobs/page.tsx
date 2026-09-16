@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
+import Nav from '@/components/Nav'
 import { listJobs, getJob, type Job } from '@/lib/api'
 
 const STATUS_COLORS: Record<string, string> = {
@@ -143,6 +144,7 @@ export default function JobsPage() {
 
   return (
     <div className="min-h-screen bg-gray-950 text-white">
+      <Nav />
       {/* Header */}
       <div className="border-b border-gray-800 px-6 py-4">
         <div className="flex items-center justify-between">

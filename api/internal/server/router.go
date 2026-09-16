@@ -55,6 +55,7 @@ func (s *Server) Router() http.Handler {
 	r.Group(func(r chi.Router) {
 		r.Use(s.authMiddleware)
 		r.Post("/api/auth/logout", s.handleLogout)
+		r.Post("/api/auth/change-password", s.handleChangePassword)
 
 		// Setup wizard.
 		r.Post("/api/setup/validate", s.handleValidateCredentials)
@@ -143,6 +144,44 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 	http.SetCookie(w, &http.Cookie{Name: "session", Value: "", MaxAge: -1, Path: "/"})
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// handleChangePassword verifies the current password and sets a new one.
+func (s *Server) handleChangePassword(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		CurrentPassword string `json:"currentPassword"`
+		NewPassword     string `json:"newPassword"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request")
+		return
+	}
+	if len(body.NewPassword) < 8 {
+		writeError(w, http.StatusBadRequest, "new password must be at least 8 characters")
+		return
+	}
+
+	var hash string
+	row := s.DB.QueryRowContext(r.Context(), `SELECT password_hash FROM app_config WHERE id = 1`)
+	if err := row.Scan(&hash); err != nil {
+		writeError(w, http.StatusUnauthorized, "not configured")
+		return
+	}
+	if err := bcrypt.CompareHashAndPassword([]byte(hash), []byte(body.CurrentPassword)); err != nil {
+		writeError(w, http.StatusUnauthorized, "current password is incorrect")
+		return
+	}
+
+	newHash, err := bcrypt.GenerateFromPassword([]byte(body.NewPassword), bcrypt.DefaultCost)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "hash error")
+		return
+	}
+	if _, err := s.DB.ExecContext(r.Context(), `UPDATE app_config SET password_hash=? WHERE id=1`, string(newHash)); err != nil {
+		writeError(w, http.StatusInternalServerError, "update failed")
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
@@ -266,7 +305,6 @@ func (s *Server) handleDeploy(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		// Create IAM access key for the deployed user.
 		// Create IAM access key for the deployed user.
 		accessKey, secretKey, err := provisioning.CreateIAMAccessKey(ctx, body.AccessKey, body.SecretKey, body.Region, outputs.IAMUser)
 		if err != nil {
@@ -451,6 +489,7 @@ func (s *Server) handleGetBackup(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleUpdateBackup(w http.ResponseWriter, r *http.Request) {
 	id, _ := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
 	var body struct {
+		Name             *string  `json:"name"`
 		Schedule         *string  `json:"schedule"`
 		SourcePaths      []string `json:"sourcePaths"`
 		RetentionLabel   *string  `json:"retentionLabel"`
@@ -460,6 +499,10 @@ func (s *Server) handleUpdateBackup(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request")
 		return
+	}
+
+	if body.Name != nil && *body.Name != "" {
+		s.DB.ExecContext(r.Context(), `UPDATE backup_definitions SET name=?, updated_at=? WHERE id=?`, *body.Name, time.Now().UTC(), id)
 	}
 
 	if body.Schedule != nil {
@@ -525,7 +568,15 @@ func (s *Server) handleRunBackupNow(w http.ResponseWriter, r *http.Request) {
 		s.DB.ExecContext(ctx, `UPDATE backup_jobs SET status=?, completed_at=?, error_message=?, log_output=? WHERE id=?`,
 			status, time.Now().UTC(), errMsg, logText, jobID)
 		if err == nil {
-			s.Catalog.SyncAfterBackup(ctx, defID)
+			if syncErr := s.Catalog.SyncAfterBackup(ctx, defID); syncErr != nil {
+				// Surface catalog sync failures on the job record — a silent
+				// failure here is what made snapshots never appear in the UI.
+				msg := fmt.Sprintf("catalog sync failed: %v", syncErr)
+				buf.Write("[error] " + msg)
+				logText = strings.Join(buf.Lines(), "\n")
+				s.DB.ExecContext(ctx, `UPDATE backup_jobs SET error_message=?, log_output=? WHERE id=?`,
+					msg, logText, jobID)
+			}
 		}
 	}()
 
@@ -688,7 +739,10 @@ func (s *Server) handleSnapshotFiles(w http.ResponseWriter, r *http.Request) {
 	var rusticID string
 	s.DB.QueryRowContext(r.Context(), `SELECT snapshot_id FROM snapshots WHERE id=?`, snapshotRowID).Scan(&rusticID)
 	if rusticID != "" {
-		s.Catalog.IndexSnapshot(r.Context(), snapshotRowID, rusticID)
+		if err := s.Catalog.IndexSnapshot(r.Context(), snapshotRowID, rusticID); err != nil {
+			writeError(w, http.StatusInternalServerError, fmt.Sprintf("index snapshot: %v", err))
+			return
+		}
 	}
 
 	query := `SELECT path, size, mtime, is_dir FROM file_index WHERE snapshot_id=?`
@@ -786,6 +840,7 @@ func (s *Server) handleGetRestore(w http.ResponseWriter, r *http.Request) {
 		"destination": destination, "status": status, "warmupStatus": warmupStatus.String,
 		"retrievalStartedAt": nullTimeStr(retrievalStarted), "restoreStartedAt": nullTimeStr(restoreStarted),
 		"completedAt": nullTimeStr(completedAt), "errorMessage": errMsg.String,
+		"logOutput": strings.Join(engine.GetBuffer(id).Lines(), "\n"),
 		"createdAt": createdAt.Time,
 	})
 }

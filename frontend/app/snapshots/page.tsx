@@ -1,5 +1,7 @@
 'use client'
 import { useEffect, useState } from 'react'
+import Link from 'next/link'
+import Nav from '@/components/Nav'
 import { listSnapshots, listSnapshotFiles, initiateRestore, type Snapshot, type FileEntry } from '@/lib/api'
 
 export default function SnapshotsPage() {
@@ -9,6 +11,7 @@ export default function SnapshotsPage() {
   const [prefix, setPrefix] = useState('')
   const [restoreDest, setRestoreDest] = useState('')
   const [restoreMsg, setRestoreMsg] = useState('')
+  const [checked, setChecked] = useState<string[]>([])
 
   useEffect(() => {
     listSnapshots().then(setSnapshots).catch(() => {})
@@ -18,6 +21,7 @@ export default function SnapshotsPage() {
     setSelected(snap)
     setPrefix('')
     setFiles([])
+    setChecked([])
     const entries = await listSnapshotFiles(snap.id).catch(() => [])
     setFiles(entries)
   }
@@ -29,18 +33,33 @@ export default function SnapshotsPage() {
     setFiles(entries)
   }
 
+  function togglePath(path: string) {
+    setChecked(c => c.includes(path) ? c.filter(x => x !== path) : [...c, path])
+  }
+
+  function toggleAll() {
+    const paths = files.map(f => f.path)
+    const allChecked = paths.every(p => checked.includes(p))
+    setChecked(allChecked ? checked.filter(p => !paths.includes(p)) : [...new Set([...checked, ...paths])])
+  }
+
   async function handleRestore() {
     if (!selected || !restoreDest) return
     try {
-      const result = await initiateRestore(selected.id, [], restoreDest)
-      setRestoreMsg(`Restore job #${result.jobId} started. Check Jobs for progress.`)
+      const result = await initiateRestore(selected.id, checked, restoreDest)
+      setRestoreMsg(`Restore job #${result.jobId} started.`)
+      setChecked([])
     } catch (err: any) {
       setRestoreMsg(`Error: ${err.message}`)
     }
   }
 
+  const allChecked = files.length > 0 && files.every(f => checked.includes(f.path))
+
   return (
-    <div className="min-h-screen bg-gray-950 text-white flex">
+    <div className="min-h-screen bg-gray-950 text-white">
+      <Nav />
+      <div className="flex" style={{ height: 'calc(100vh - 65px)' }}>
       {/* Sidebar: snapshot list */}
       <aside className="w-72 border-r border-gray-800 p-4 space-y-2 overflow-y-auto">
         <h2 className="font-semibold text-sm text-gray-400 uppercase tracking-wide mb-3">Snapshots</h2>
@@ -59,7 +78,7 @@ export default function SnapshotsPage() {
       </aside>
 
       {/* Main: file browser */}
-      <main className="flex-1 p-6 space-y-4">
+      <main className="flex-1 p-6 space-y-4 overflow-y-auto">
         {!selected ? (
           <div className="text-gray-500 mt-16 text-center">Select a snapshot to browse its contents.</div>
         ) : (
@@ -88,6 +107,15 @@ export default function SnapshotsPage() {
               <table className="w-full text-sm">
                 <thead className="border-b border-gray-800">
                   <tr className="text-gray-400 text-xs uppercase">
+                    <th className="text-left px-4 py-3 w-10">
+                      <input
+                        type="checkbox"
+                        checked={allChecked}
+                        onChange={toggleAll}
+                        className="accent-blue-500"
+                        title="Select all in this folder"
+                      />
+                    </th>
                     <th className="text-left px-4 py-3">Name</th>
                     <th className="text-right px-4 py-3">Size</th>
                     <th className="text-right px-4 py-3">Modified</th>
@@ -96,6 +124,14 @@ export default function SnapshotsPage() {
                 <tbody>
                   {files.map((f, i) => (
                     <tr key={i} className="border-b border-gray-800/50 hover:bg-gray-800/30">
+                      <td className="px-4 py-2">
+                        <input
+                          type="checkbox"
+                          checked={checked.includes(f.path)}
+                          onChange={() => togglePath(f.path)}
+                          className="accent-blue-500"
+                        />
+                      </td>
                       <td className="px-4 py-2">
                         {f.isDir ? (
                           <button onClick={() => navigatePrefix(f.path + '/')} className="text-blue-400 hover:underline">
@@ -116,7 +152,9 @@ export default function SnapshotsPage() {
 
             {/* Restore */}
             <div className="bg-gray-900 rounded-xl p-5 space-y-3">
-              <h3 className="font-semibold">Restore This Snapshot</h3>
+              <h3 className="font-semibold">
+                {checked.length === 0 ? 'Restore This Snapshot' : `Restore ${checked.length} Selected`}
+              </h3>
               <div className="flex gap-3">
                 <input
                   type="text"
@@ -132,12 +170,22 @@ export default function SnapshotsPage() {
                   Restore
                 </button>
               </div>
-              {restoreMsg && <p className="text-sm text-green-400">{restoreMsg}</p>}
-              <p className="text-xs text-gray-500">Full snapshot restore. Glacier retrieval may take 12–48 hours.</p>
+              {restoreMsg && (
+                <p className="text-sm text-green-400">
+                  {restoreMsg} <Link href="/restore" className="underline hover:text-green-300">Track progress →</Link>
+                </p>
+              )}
+              <p className="text-xs text-gray-500">
+                {checked.length === 0
+                  ? 'No files selected — restores the full snapshot.'
+                  : 'Restores only the selected files and folders.'}{' '}
+                Glacier retrieval may take 12–48 hours.
+              </p>
             </div>
           </>
         )}
       </main>
+      </div>
     </div>
   )
 }

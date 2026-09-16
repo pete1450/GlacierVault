@@ -22,6 +22,8 @@ async function req<T>(method: string, path: string, body?: unknown): Promise<T> 
 // Auth
 export const login = (password: string) => req('POST', '/auth/login', { password })
 export const logout = () => req('POST', '/auth/logout')
+export const changePassword = (currentPassword: string, newPassword: string) =>
+  req('POST', '/auth/change-password', { currentPassword, newPassword })
 
 // Setup
 export const validateCredentials = (accessKey: string, secretKey: string, region: string) =>
@@ -86,5 +88,6 @@ export interface FileEntry { path: string; size: number; mtime: string; isDir: b
 export interface RestoreJob {
   id: number; snapshotId: number; requestedPaths: string; destination: string
   status: string; warmupStatus: string; retrievalStartedAt: string | null
-  restoreStartedAt: string | null; completedAt: string | null; errorMessage: string; createdAt: string
+  restoreStartedAt: string | null; completedAt: string | null; errorMessage: string
+  logOutput: string; createdAt: string
 }

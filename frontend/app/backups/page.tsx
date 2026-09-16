@@ -1,6 +1,6 @@
 'use client'
 import { useEffect, useState } from 'react'
-import Link from 'next/link'
+import Nav from '@/components/Nav'
 import {
   listBackups, createBackup, updateBackup, deleteBackup, runBackupNow,
   type BackupDef, type CreateBackupInput,
@@ -30,6 +30,7 @@ export default function BackupsPage() {
   const [backups, setBackups] = useState<BackupDef[]>([])
   const [loading, setLoading] = useState(true)
   const [showForm, setShowForm] = useState(false)
+  const [editingId, setEditingId] = useState<number | null>(null)
   const [form, setForm] = useState({ ...DEFAULT_FORM })
   const [sourcePathInput, setSourcePathInput] = useState('')
   const [saving, setSaving] = useState(false)
@@ -46,8 +47,25 @@ export default function BackupsPage() {
     setLoading(false)
   }
 
-  function openForm() {
-    setForm({ ...DEFAULT_FORM })
+  function openForm(backup?: BackupDef) {
+    if (backup) {
+      let paths: string[] = []
+      try { paths = JSON.parse(backup.sourcePaths) } catch { paths = [backup.sourcePaths] }
+      const preset = NAMED_SCHEDULES.some(s => s.value === backup.schedule) ? backup.schedule : 'custom'
+      setForm({
+        name: backup.name,
+        sourcePaths: paths,
+        schedule: backup.schedule,
+        schedulePreset: preset,
+        retentionLabel: backup.retentionLabel,
+        compressionLevel: backup.compressionLevel,
+        password: '',
+      })
+      setEditingId(backup.id)
+    } else {
+      setForm({ ...DEFAULT_FORM })
+      setEditingId(null)
+    }
     setSourcePathInput('')
     setError('')
     setShowForm(true)
@@ -74,16 +92,25 @@ export default function BackupsPage() {
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
-    if (!form.name || form.sourcePaths.length === 0 || !form.password) {
+    if (!form.name || form.sourcePaths.length === 0 || (editingId === null && !form.password)) {
       setError('Name, at least one source path, and encryption password are required.')
+      return
+    }
+    if (editingId !== null && form.schedulePreset === 'custom' && !form.schedule) {
+      setError('Custom schedule requires a cron expression.')
       return
     }
     setSaving(true)
     setError('')
     try {
-      const { schedulePreset, ...payload } = form
-      await createBackup(payload)
+      const { schedulePreset, password, ...payload } = form
+      if (editingId === null) {
+        await createBackup({ ...payload, password })
+      } else {
+        await updateBackup(editingId, payload)
+      }
       setShowForm(false)
+      setEditingId(null)
       refresh()
     } catch (err: any) {
       setError(err.message)
@@ -122,24 +149,13 @@ export default function BackupsPage() {
 
   return (
     <div className="min-h-screen bg-gray-950 text-white">
-      {/* Nav */}
-      <nav className="border-b border-gray-800 px-6 py-4 flex items-center justify-between">
-        <span className="font-bold text-lg">GlacierVault</span>
-        <div className="flex gap-4 text-sm text-gray-400">
-          <Link href="/">Dashboard</Link>
-          <Link href="/backups" className="text-white">Backups</Link>
-          <Link href="/snapshots">Snapshots</Link>
-          <Link href="/restore">Restore</Link>
-          <Link href="/jobs">Jobs</Link>
-          <Link href="/settings">Settings</Link>
-        </div>
-      </nav>
+      <Nav />
 
       <main className="max-w-4xl mx-auto px-6 py-8 space-y-6">
         <div className="flex items-center justify-between">
           <h1 className="text-2xl font-bold">Backup Sources</h1>
           <button
-            onClick={openForm}
+            onClick={() => openForm()}
             className="px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded-lg text-sm font-medium transition-colors"
           >
             + New Backup
@@ -160,7 +176,7 @@ export default function BackupsPage() {
             <p className="text-gray-400 text-lg mb-2">No backups configured yet</p>
             <p className="text-gray-600 text-sm mb-6">Add a backup source to get started.</p>
             <button
-              onClick={openForm}
+              onClick={() => openForm()}
               className="px-5 py-2 bg-blue-600 hover:bg-blue-700 rounded-lg font-medium transition-colors"
             >
               + New Backup
@@ -176,6 +192,7 @@ export default function BackupsPage() {
                 deleteConfirm={deleteConfirm === b.id}
                 onToggle={() => handleToggleEnabled(b)}
                 onRunNow={() => handleRunNow(b.id)}
+                onEdit={() => openForm(b)}
                 onDeleteClick={() => setDeleteConfirm(deleteConfirm === b.id ? null : b.id)}
                 onDeleteConfirm={() => handleDelete(b.id)}
               />
@@ -189,7 +206,7 @@ export default function BackupsPage() {
         <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
           <div className="bg-gray-900 rounded-xl w-full max-w-lg max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between px-6 py-4 border-b border-gray-800">
-              <h2 className="font-semibold text-lg">New Backup Source</h2>
+              <h2 className="font-semibold text-lg">{editingId === null ? 'New Backup Source' : 'Edit Backup Source'}</h2>
               <button onClick={() => setShowForm(false)} className="text-gray-400 hover:text-white text-xl leading-none">×</button>
             </div>
 
@@ -298,17 +315,19 @@ export default function BackupsPage() {
                 />
               </Field>
 
-              {/* Encryption password */}
-              <Field label="Encryption Password" required hint="Used by Rustic to encrypt backup data. Store this safely.">
-                <input
-                  type="password"
-                  value={form.password}
-                  onChange={e => setForm(f => ({ ...f, password: e.target.value }))}
-                  placeholder="Strong passphrase"
-                  className={inputCls}
-                  required
-                />
-              </Field>
+              {/* Encryption password — only on create */}
+              {editingId === null && (
+                <Field label="Encryption Password" required hint="Used by Rustic to encrypt backup data. Store this safely.">
+                  <input
+                    type="password"
+                    value={form.password}
+                    onChange={e => setForm(f => ({ ...f, password: e.target.value }))}
+                    placeholder="Strong passphrase"
+                    className={inputCls}
+                    required
+                  />
+                </Field>
+              )}
 
               {error && <p className="text-red-400 text-sm">{error}</p>}
 
@@ -318,7 +337,7 @@ export default function BackupsPage() {
                   disabled={saving}
                   className="flex-1 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 rounded-lg font-medium transition-colors"
                 >
-                  {saving ? 'Saving…' : 'Create Backup'}
+                  {saving ? 'Saving…' : editingId === null ? 'Create Backup' : 'Save Changes'}
                 </button>
                 <button
                   type="button"
@@ -337,13 +356,14 @@ export default function BackupsPage() {
 }
 
 function BackupCard({
-  backup, running, deleteConfirm, onToggle, onRunNow, onDeleteClick, onDeleteConfirm,
+  backup, running, deleteConfirm, onToggle, onRunNow, onEdit, onDeleteClick, onDeleteConfirm,
 }: {
   backup: BackupDef
   running: boolean
   deleteConfirm: boolean
   onToggle: () => void
   onRunNow: () => void
+  onEdit: () => void
   onDeleteClick: () => void
   onDeleteConfirm: () => void
 }) {
@@ -384,6 +404,12 @@ function BackupCard({
             className="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 rounded-lg text-sm transition-colors"
           >
             {backup.enabled ? 'Disable' : 'Enable'}
+          </button>
+          <button
+            onClick={onEdit}
+            className="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 rounded-lg text-sm transition-colors"
+          >
+            Edit
           </button>
           <button
             onClick={onDeleteClick}
