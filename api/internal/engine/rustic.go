@@ -181,25 +181,68 @@ func (e *Engine) RunBackup(ctx context.Context, buf *RingBuffer, sourcePaths []s
 }
 
 // ListSnapshots returns all snapshots from the repository.
+//
+// rustic's `snapshots --json` emits snapshots grouped by (hostname, label,
+// paths) as [[group, [snapshots...]], ...]; we flatten all groups into one
+// list. A plain flat array is accepted as a fallback.
 func (e *Engine) ListSnapshots(ctx context.Context) ([]Snapshot, error) {
 	out, err := e.run(ctx, nil, "snapshots", "--json")
 	if err != nil {
 		return nil, err
 	}
-	var snaps []Snapshot
-	if err := json.Unmarshal(out, &snaps); err != nil {
+
+	// Try the grouped format first.
+	var groups []json.RawMessage
+	if err := json.Unmarshal(out, &groups); err != nil {
 		return nil, fmt.Errorf("parse snapshots: %w", err)
+	}
+	var snaps []Snapshot
+	for _, g := range groups {
+		var pair []json.RawMessage
+		if err := json.Unmarshal(g, &pair); err != nil || len(pair) != 2 {
+			// Fall back: maybe it's a flat snapshot list after all.
+			var flat []Snapshot
+			if ferr := json.Unmarshal(out, &flat); ferr != nil {
+				return nil, fmt.Errorf("parse snapshots: %w", err)
+			}
+			return flat, nil
+		}
+		var groupSnaps []Snapshot
+		if err := json.Unmarshal(pair[1], &groupSnaps); err != nil {
+			return nil, fmt.Errorf("parse snapshots: %w", err)
+		}
+		snaps = append(snaps, groupSnaps...)
 	}
 	return snaps, nil
 }
 
 // ListFiles returns file entries for a snapshot.
+//
+// rustic 0.9.x `ls --json` emits a single JSON array of relative path strings.
+// Older/newer versions may emit one JSON object per line (NDJSON) with
+// name/path/size/mtime/type fields; both formats are accepted. For the path
+// array format, size/mtime are unknown and directories are detected by the
+// "is a strict prefix of another path" heuristic.
 func (e *Engine) ListFiles(ctx context.Context, snapshotID string) ([]FileEntry, error) {
 	out, err := e.run(ctx, nil, "ls", snapshotID, "--json")
 	if err != nil {
 		return nil, err
 	}
-	// rustic ls --json outputs one JSON object per line
+	trimmed := strings.TrimSpace(string(out))
+	if trimmed == "" {
+		return nil, nil
+	}
+
+	// Format 1: single JSON array of path strings.
+	if strings.HasPrefix(trimmed, "[") {
+		var paths []string
+		if err := json.Unmarshal([]byte(trimmed), &paths); err != nil {
+			return nil, fmt.Errorf("parse ls paths: %w", err)
+		}
+		return pathsToEntries(paths), nil
+	}
+
+	// Format 2: one JSON object per line.
 	var entries []FileEntry
 	scanner := bufio.NewScanner(bytes.NewReader(out))
 	for scanner.Scan() {
@@ -214,6 +257,29 @@ func (e *Engine) ListFiles(ctx context.Context, snapshotID string) ([]FileEntry,
 		entries = append(entries, entry)
 	}
 	return entries, nil
+}
+
+// pathsToEntries converts relative path strings into FileEntries. A path is
+// considered a directory when it is a strict prefix (path + "/") of another
+// path in the list.
+func pathsToEntries(paths []string) []FileEntry {
+	entries := make([]FileEntry, 0, len(paths))
+	for _, p := range paths {
+		isDir := false
+		prefix := strings.TrimSuffix(p, "/") + "/"
+		for _, other := range paths {
+			if other != p && strings.HasPrefix(other, prefix) {
+				isDir = true
+				break
+			}
+		}
+		entries = append(entries, FileEntry{
+			Path: p,
+			Name: p[strings.LastIndex(p, "/")+1:],
+			Type: map[bool]string{true: "dir", false: "file"}[isDir],
+		})
+	}
+	return entries
 }
 
 // RunRestore executes rustic restore for a snapshot to destination.

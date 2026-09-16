@@ -267,7 +267,6 @@ func (s *Server) handleDeploy(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Create IAM access key for the deployed user.
-		// Create IAM access key for the deployed user.
 		accessKey, secretKey, err := provisioning.CreateIAMAccessKey(ctx, body.AccessKey, body.SecretKey, body.Region, outputs.IAMUser)
 		if err != nil {
 			buf.Write("[error] could not create IAM key: " + err.Error())
@@ -525,7 +524,15 @@ func (s *Server) handleRunBackupNow(w http.ResponseWriter, r *http.Request) {
 		s.DB.ExecContext(ctx, `UPDATE backup_jobs SET status=?, completed_at=?, error_message=?, log_output=? WHERE id=?`,
 			status, time.Now().UTC(), errMsg, logText, jobID)
 		if err == nil {
-			s.Catalog.SyncAfterBackup(ctx, defID)
+			if syncErr := s.Catalog.SyncAfterBackup(ctx, defID); syncErr != nil {
+				// Surface catalog sync failures on the job record — a silent
+				// failure here is what made snapshots never appear in the UI.
+				msg := fmt.Sprintf("catalog sync failed: %v", syncErr)
+				buf.Write("[error] " + msg)
+				logText = strings.Join(buf.Lines(), "\n")
+				s.DB.ExecContext(ctx, `UPDATE backup_jobs SET error_message=?, log_output=? WHERE id=?`,
+					msg, logText, jobID)
+			}
 		}
 	}()
 
@@ -688,7 +695,10 @@ func (s *Server) handleSnapshotFiles(w http.ResponseWriter, r *http.Request) {
 	var rusticID string
 	s.DB.QueryRowContext(r.Context(), `SELECT snapshot_id FROM snapshots WHERE id=?`, snapshotRowID).Scan(&rusticID)
 	if rusticID != "" {
-		s.Catalog.IndexSnapshot(r.Context(), snapshotRowID, rusticID)
+		if err := s.Catalog.IndexSnapshot(r.Context(), snapshotRowID, rusticID); err != nil {
+			writeError(w, http.StatusInternalServerError, fmt.Sprintf("index snapshot: %v", err))
+			return
+		}
 	}
 
 	query := `SELECT path, size, mtime, is_dir FROM file_index WHERE snapshot_id=?`

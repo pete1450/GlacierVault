@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -11,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	appCrypto "github.com/glaciervault/api/internal/crypto"
 	"github.com/glaciervault/api/internal/engine"
 )
 
@@ -103,9 +105,15 @@ func (m *Manager) run(ctx context.Context, jobID, snapshotRowID int64, paths []s
 }
 
 // executeWarmup invokes the warmup-s3-archives binary with the snapshot ID.
+// AWS credentials are injected into its environment the same way as for the
+// `aws` CLI: the container does not have them in its ambient environment.
 func (m *Manager) executeWarmup(ctx context.Context, jobID int64, rusticSnapshotID string) error {
+	env, err := m.awsEnv(ctx)
+	if err != nil {
+		return err
+	}
 	cmd := exec.CommandContext(ctx, warmupBin, "restore", rusticSnapshotID)
-	cmd.Env = os.Environ()
+	cmd.Env = env
 
 	pr, pw, err := os.Pipe()
 	if err != nil {
@@ -162,20 +170,111 @@ func (m *Manager) pollRetrieval(ctx context.Context, jobID int64) error {
 	}
 }
 
-// checkSQS polls SQS for ObjectRestore:Completed notifications.
+// awsEnv loads the deployed IAM credentials and region from the database and
+// returns them as environment variables for AWS CLI subprocesses. The warmup
+// tool reads credentials from rustic.toml, but the `aws` CLI needs them in the
+// environment.
+func (m *Manager) awsEnv(ctx context.Context) ([]string, error) {
+	var region, encKey, encSecret string
+	err := m.db.QueryRowContext(ctx,
+		`SELECT region, encrypted_access_key, encrypted_secret_key FROM aws_config WHERE id=1`,
+	).Scan(&region, &encKey, &encSecret)
+	if err != nil {
+		return nil, fmt.Errorf("load aws config: %w", err)
+	}
+	key, err := appCrypto.Decrypt(encKey)
+	if err != nil {
+		return nil, fmt.Errorf("decrypt access key: %w", err)
+	}
+	secret, err := appCrypto.Decrypt(encSecret)
+	if err != nil {
+		return nil, fmt.Errorf("decrypt secret key: %w", err)
+	}
+	return append(os.Environ(),
+		"AWS_ACCESS_KEY_ID="+key,
+		"AWS_SECRET_ACCESS_KEY="+secret,
+		"AWS_DEFAULT_REGION="+region,
+	), nil
+}
+
+// sqsReceiveMessage is the parsed output of `aws sqs receive-message`.
+type sqsReceiveMessage struct {
+	Messages []struct {
+		MessageID     string `json:"MessageId"`
+		ReceiptHandle string `json:"ReceiptHandle"`
+		Body          string `json:"Body"`
+	} `json:"Messages"`
+}
+
+// s3Event is the S3 event notification delivered to the queue.
+type s3Event struct {
+	Records []struct {
+		EventName string `json:"eventName"`
+	} `json:"Records"`
+}
+
+// checkSQS polls SQS for ObjectRestore:Completed notifications. Processed
+// messages are deleted so a later restore does not see stale events.
 func (m *Manager) checkSQS(ctx context.Context, jobID int64) (bool, error) {
+	if m.sqsURL == "" {
+		return false, fmt.Errorf("no SQS queue configured")
+	}
+	env, err := m.awsEnv(ctx)
+	if err != nil {
+		return false, err
+	}
+
 	cmd := exec.CommandContext(ctx, "aws", "sqs", "receive-message",
 		"--queue-url", m.sqsURL,
 		"--max-number-of-messages", "10",
 		"--wait-time-seconds", "20",
 		"--output", "json",
 	)
+	cmd.Env = env
 	out, err := cmd.Output()
 	if err != nil {
 		return false, err
 	}
-	// Look for ObjectRestore:Completed in the message body.
-	return strings.Contains(string(out), "ObjectRestore:Completed"), nil
+
+	var received sqsReceiveMessage
+	if err := json.Unmarshal(out, &received); err != nil {
+		return false, fmt.Errorf("parse sqs response: %w", err)
+	}
+	if len(received.Messages) == 0 {
+		return false, nil
+	}
+
+	completed := false
+	for _, msg := range received.Messages {
+		var event s3Event
+		// The body may be a bare S3 event or an SNS envelope wrapping one.
+		body := msg.Body
+		var envelope struct {
+			Message string `json:"Message"`
+		}
+		if err := json.Unmarshal([]byte(body), &envelope); err == nil && envelope.Message != "" {
+			body = envelope.Message
+		}
+		if err := json.Unmarshal([]byte(body), &event); err == nil {
+			for _, rec := range event.Records {
+				if strings.Contains(rec.EventName, "ObjectRestore:Completed") {
+					completed = true
+					break
+				}
+			}
+		}
+		// Delete the message regardless so it is not reprocessed.
+		del := exec.CommandContext(ctx, "aws", "sqs", "delete-message",
+			"--queue-url", m.sqsURL,
+			"--receipt-handle", msg.ReceiptHandle,
+		)
+		del.Env = env
+		if derr := del.Run(); derr != nil {
+			buf := engine.GetBuffer(jobID)
+			buf.Write(fmt.Sprintf("[sqs] warning: could not delete message: %v", derr))
+		}
+	}
+	return completed, nil
 }
 
 func (m *Manager) setStatus(ctx context.Context, jobID int64, status, errMsg string) {
