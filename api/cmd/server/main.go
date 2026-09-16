@@ -50,11 +50,9 @@ func main() {
 	}
 
 	// Load SQS URL from DB (may be empty before setup).
-	sqsURL := loadSQSURL(database)
-
 	eng := engine.New(rusticConfigPath)
 	cat := catalog.New(database, eng)
-	restoreMgr := restore.New(database, eng, sqsURL)
+	restoreMgr := restore.New(database, eng)
 
 	sched := scheduler.New(database, eng, cat)
 	if err := sched.Start(context.Background()); err != nil {
@@ -126,10 +124,4 @@ func loadOrGenerateJWTSecret(configDir string) []byte {
 	rand.Read(secret)
 	os.WriteFile(path, secret, 0600)
 	return secret
-}
-
-func loadSQSURL(database *sql.DB) string {
-	var sqsURL sql.NullString
-	database.QueryRow(`SELECT sqs_url FROM aws_config WHERE id=1`).Scan(&sqsURL)
-	return sqsURL.String
 }

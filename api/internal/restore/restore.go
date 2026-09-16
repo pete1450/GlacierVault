@@ -4,13 +4,18 @@ import (
 	"bufio"
 	"context"
 	"database/sql"
-	"encoding/json"
 	"fmt"
 	"log"
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
 	"time"
+
+	"github.com/aws/aws-sdk-go-v2/aws"
+	awsconfig "github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/credentials"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 
 	appCrypto "github.com/glaciervault/api/internal/crypto"
 	"github.com/glaciervault/api/internal/engine"
@@ -18,26 +23,37 @@ import (
 
 const warmupBin = "warmup-s3-archives"
 
+// Retrieval wait tuning. Glacier Deep Archive standard retrieval SLA is
+// 12-48 hours, so the timeout covers the worst case with margin.
+const (
+	restorePollInterval = 30 * time.Minute
+	restoreTimeout      = 48 * time.Hour
+	// Time allowed for warmup-submitted restore requests to become visible
+	// via head-object before we conclude nothing was requested.
+	restoreGracePeriod = 30 * time.Minute
+	// Number of concurrent head-object calls per status check.
+	headWorkers = 16
+)
+
 // Status values for restore_jobs.
 const (
-	StatusQueued             = "queued"
-	StatusWarmupRequested    = "warmup_requested"
+	StatusQueued              = "queued"
+	StatusWarmupRequested     = "warmup_requested"
 	StatusRetrievalInProgress = "retrieval_in_progress"
-	StatusRetrievalComplete  = "retrieval_complete"
-	StatusRestoring          = "restoring"
-	StatusCompleted          = "completed"
-	StatusFailed             = "failed"
+	StatusRetrievalComplete   = "retrieval_complete"
+	StatusRestoring           = "restoring"
+	StatusCompleted           = "completed"
+	StatusFailed              = "failed"
 )
 
 // Manager handles the full Glacier restore lifecycle.
 type Manager struct {
 	db     *sql.DB
 	engine *engine.Engine
-	sqsURL string
 }
 
-func New(db *sql.DB, eng *engine.Engine, sqsURL string) *Manager {
-	return &Manager{db: db, engine: eng, sqsURL: sqsURL}
+func New(db *sql.DB, eng *engine.Engine) *Manager {
+	return &Manager{db: db, engine: eng}
 }
 
 // Initiate creates a restore job record and starts the workflow asynchronously.
@@ -79,13 +95,15 @@ func (m *Manager) run(ctx context.Context, jobID, snapshotRowID int64, paths []s
 	if err := m.executeWarmup(ctx, jobID, rusticID); err != nil {
 		return fmt.Errorf("warmup: %w", err)
 	}
+	m.db.ExecContext(ctx, `UPDATE restore_jobs SET warmup_status='completed' WHERE id=?`, jobID)
 
-	// Step 2: Poll SQS until retrieval is complete.
+	// Step 2: Wait until every data pack with a pending restore request
+	// reports ongoing-request="false" via head-object.
 	m.setStatus(ctx, jobID, StatusRetrievalInProgress, "")
 	m.db.ExecContext(ctx, `UPDATE restore_jobs SET retrieval_started_at=? WHERE id=?`, time.Now().UTC(), jobID)
 
-	if err := m.pollRetrieval(ctx, jobID); err != nil {
-		return fmt.Errorf("poll retrieval: %w", err)
+	if err := m.waitForRestore(ctx, jobID); err != nil {
+		return fmt.Errorf("wait for retrieval: %w", err)
 	}
 
 	m.setStatus(ctx, jobID, StatusRetrievalComplete, "")
@@ -105,8 +123,8 @@ func (m *Manager) run(ctx context.Context, jobID, snapshotRowID int64, paths []s
 }
 
 // executeWarmup invokes the warmup-s3-archives binary with the snapshot ID.
-// AWS credentials are injected into its environment the same way as for the
-// `aws` CLI: the container does not have them in its ambient environment.
+// AWS credentials are injected into its environment: the container does not
+// have them in its ambient environment.
 func (m *Manager) executeWarmup(ctx context.Context, jobID int64, rusticSnapshotID string) error {
 	env, err := m.awsEnv(ctx)
 	if err != nil {
@@ -139,142 +157,188 @@ func (m *Manager) executeWarmup(ctx context.Context, jobID int64, rusticSnapshot
 	return runErr
 }
 
-// pollRetrieval polls the SQS queue for ObjectRestore:Completed events every 60s.
-// It times out after 24 hours (Glacier Deep Archive standard retrieval SLA).
-func (m *Manager) pollRetrieval(ctx context.Context, jobID int64) error {
-	deadline := time.Now().Add(24 * time.Hour)
-	ticker := time.NewTicker(60 * time.Second)
-	defer ticker.Stop()
-
-	buf := engine.GetBuffer(jobID)
-
-	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-ticker.C:
-			if time.Now().After(deadline) {
-				return fmt.Errorf("retrieval timeout: exceeded 24h")
-			}
-			completed, err := m.checkSQS(ctx, jobID)
-			if err != nil {
-				buf.Write(fmt.Sprintf("[sqs] error: %v", err))
-				continue
-			}
-			if completed {
-				buf.Write("[sqs] retrieval complete")
-				return nil
-			}
-			buf.Write("[sqs] waiting for retrieval...")
-		}
-	}
+// awsSettings holds the decrypted deployment credentials plus the cold bucket.
+type awsSettings struct {
+	region     string
+	accessKey  string
+	secretKey  string
+	coldBucket string
 }
 
-// awsEnv loads the deployed IAM credentials and region from the database and
-// returns them as environment variables for AWS CLI subprocesses. The warmup
-// tool reads credentials from rustic.toml, but the `aws` CLI needs them in the
-// environment.
-func (m *Manager) awsEnv(ctx context.Context) ([]string, error) {
-	var region, encKey, encSecret string
+// loadAWSSettings reads and decrypts the deployment's AWS configuration.
+func (m *Manager) loadAWSSettings(ctx context.Context) (*awsSettings, error) {
+	var s awsSettings
+	var encKey, encSecret string
 	err := m.db.QueryRowContext(ctx,
-		`SELECT region, encrypted_access_key, encrypted_secret_key FROM aws_config WHERE id=1`,
-	).Scan(&region, &encKey, &encSecret)
+		`SELECT region, encrypted_access_key, encrypted_secret_key, cold_bucket FROM aws_config WHERE id=1`,
+	).Scan(&s.region, &encKey, &encSecret, &s.coldBucket)
 	if err != nil {
 		return nil, fmt.Errorf("load aws config: %w", err)
 	}
-	key, err := appCrypto.Decrypt(encKey)
-	if err != nil {
+	if s.coldBucket == "" {
+		return nil, fmt.Errorf("no cold bucket configured — run setup first")
+	}
+	if s.accessKey, err = appCrypto.Decrypt(encKey); err != nil {
 		return nil, fmt.Errorf("decrypt access key: %w", err)
 	}
-	secret, err := appCrypto.Decrypt(encSecret)
-	if err != nil {
+	if s.secretKey, err = appCrypto.Decrypt(encSecret); err != nil {
 		return nil, fmt.Errorf("decrypt secret key: %w", err)
 	}
+	return &s, nil
+}
+
+// awsEnv returns the process environment plus the deployment's AWS
+// credentials, for subprocesses (warmup tool) that need them.
+func (m *Manager) awsEnv(ctx context.Context) ([]string, error) {
+	s, err := m.loadAWSSettings(ctx)
+	if err != nil {
+		return nil, err
+	}
 	return append(os.Environ(),
-		"AWS_ACCESS_KEY_ID="+key,
-		"AWS_SECRET_ACCESS_KEY="+secret,
-		"AWS_DEFAULT_REGION="+region,
+		"AWS_ACCESS_KEY_ID="+s.accessKey,
+		"AWS_SECRET_ACCESS_KEY="+s.secretKey,
+		"AWS_DEFAULT_REGION="+s.region,
 	), nil
 }
 
-// sqsReceiveMessage is the parsed output of `aws sqs receive-message`.
-type sqsReceiveMessage struct {
-	Messages []struct {
-		MessageID     string `json:"MessageId"`
-		ReceiptHandle string `json:"ReceiptHandle"`
-		Body          string `json:"Body"`
-	} `json:"Messages"`
-}
-
-// s3Event is the S3 event notification delivered to the queue.
-type s3Event struct {
-	Records []struct {
-		EventName string `json:"eventName"`
-	} `json:"Records"`
-}
-
-// checkSQS polls SQS for ObjectRestore:Completed notifications. Processed
-// messages are deleted so a later restore does not see stale events.
-func (m *Manager) checkSQS(ctx context.Context, jobID int64) (bool, error) {
-	if m.sqsURL == "" {
-		return false, fmt.Errorf("no SQS queue configured")
-	}
-	env, err := m.awsEnv(ctx)
+// s3Client builds an S3 client authenticated as the deployment's IAM user.
+func (m *Manager) s3Client(ctx context.Context) (*s3.Client, string, error) {
+	s, err := m.loadAWSSettings(ctx)
 	if err != nil {
-		return false, err
+		return nil, "", err
 	}
-
-	cmd := exec.CommandContext(ctx, "aws", "sqs", "receive-message",
-		"--queue-url", m.sqsURL,
-		"--max-number-of-messages", "10",
-		"--wait-time-seconds", "20",
-		"--output", "json",
+	cfg, err := awsconfig.LoadDefaultConfig(ctx,
+		awsconfig.WithRegion(s.region),
+		awsconfig.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(s.accessKey, s.secretKey, "")),
 	)
-	cmd.Env = env
-	out, err := cmd.Output()
 	if err != nil {
-		return false, err
+		return nil, "", fmt.Errorf("load aws sdk config: %w", err)
 	}
+	return s3.NewFromConfig(cfg), s.coldBucket, nil
+}
 
-	var received sqsReceiveMessage
-	if err := json.Unmarshal(out, &received); err != nil {
-		return false, fmt.Errorf("parse sqs response: %w", err)
+// waitForRestore polls head-object on every data pack in the cold bucket
+// until all packs with a restore request report ongoing-request="false".
+// This is exact: unlike the old "first SQS event wins" approach, a snapshot
+// restore is not considered complete until every pack is actually available.
+func (m *Manager) waitForRestore(ctx context.Context, jobID int64) error {
+	client, bucket, err := m.s3Client(ctx)
+	if err != nil {
+		return err
 	}
-	if len(received.Messages) == 0 {
-		return false, nil
-	}
+	buf := engine.GetBuffer(jobID)
+	deadline := time.Now().Add(restoreTimeout)
+	graceUntil := time.Now().Add(restoreGracePeriod)
 
-	completed := false
-	for _, msg := range received.Messages {
-		var event s3Event
-		// The body may be a bare S3 event or an SNS envelope wrapping one.
-		body := msg.Body
-		var envelope struct {
-			Message string `json:"Message"`
-		}
-		if err := json.Unmarshal([]byte(body), &envelope); err == nil && envelope.Message != "" {
-			body = envelope.Message
-		}
-		if err := json.Unmarshal([]byte(body), &event); err == nil {
-			for _, rec := range event.Records {
-				if strings.Contains(rec.EventName, "ObjectRestore:Completed") {
-					completed = true
-					break
-				}
+	for {
+		done, total, pending, err := m.restoreComplete(ctx, client, bucket)
+		switch {
+		case err != nil:
+			buf.Write(fmt.Sprintf("[restore] status check failed: %v (retrying)", err))
+		case done:
+			buf.Write(fmt.Sprintf("[restore] all %d packs available", total))
+			return nil
+		case total == 0:
+			buf.Write("[restore] waiting for restore requests to register...")
+			if time.Now().After(graceUntil) {
+				return fmt.Errorf("no restore requests detected %v after warmup — warmup may have failed", restoreGracePeriod)
 			}
+		default:
+			buf.Write(fmt.Sprintf("[restore] %d of %d packs still restoring...", pending, total))
 		}
-		// Delete the message regardless so it is not reprocessed.
-		del := exec.CommandContext(ctx, "aws", "sqs", "delete-message",
-			"--queue-url", m.sqsURL,
-			"--receipt-handle", msg.ReceiptHandle,
-		)
-		del.Env = env
-		if derr := del.Run(); derr != nil {
-			buf := engine.GetBuffer(jobID)
-			buf.Write(fmt.Sprintf("[sqs] warning: could not delete message: %v", derr))
+
+		if time.Now().After(deadline) {
+			return fmt.Errorf("retrieval timeout: exceeded %v", restoreTimeout)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(restorePollInterval):
 		}
 	}
-	return completed, nil
+}
+
+// restoreComplete lists data packs in the cold bucket and heads each one.
+// Packs with no restore header were not requested by this warmup and are
+// skipped; done is true only when at least one pack was requested and none
+// are still restoring.
+func (m *Manager) restoreComplete(ctx context.Context, client *s3.Client, bucket string) (done bool, total, pending int, err error) {
+	// Rustic stores data packs under data/ in the cold repository.
+	var keys []string
+	paginator := s3.NewListObjectsV2Paginator(client, &s3.ListObjectsV2Input{
+		Bucket: aws.String(bucket),
+		Prefix: aws.String("data/"),
+	})
+	for paginator.HasMorePages() {
+		page, err := paginator.NextPage(ctx)
+		if err != nil {
+			return false, 0, 0, fmt.Errorf("list objects: %w", err)
+		}
+		for _, obj := range page.Contents {
+			keys = append(keys, aws.ToString(obj.Key))
+		}
+	}
+
+	type headResult struct {
+		requested bool
+		ongoing   bool
+		err       error
+	}
+	jobs := make(chan string)
+	results := make(chan headResult, len(keys))
+	var wg sync.WaitGroup
+	for w := 0; w < headWorkers; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for key := range jobs {
+				head, err := client.HeadObject(ctx, &s3.HeadObjectInput{
+					Bucket: aws.String(bucket),
+					Key:    aws.String(key),
+				})
+				if err != nil {
+					results <- headResult{err: fmt.Errorf("head %s: %w", key, err)}
+					continue
+				}
+				requested, ongoing := parseRestoreHeader(aws.ToString(head.Restore))
+				results <- headResult{requested: requested, ongoing: ongoing}
+			}
+		}()
+	}
+	go func() {
+		for _, k := range keys {
+			jobs <- k
+		}
+		close(jobs)
+	}()
+	go func() {
+		wg.Wait()
+		close(results)
+	}()
+
+	for r := range results {
+		if r.err != nil {
+			return false, 0, 0, r.err
+		}
+		if !r.requested {
+			continue
+		}
+		total++
+		if r.ongoing {
+			pending++
+		}
+	}
+	return total > 0 && pending == 0, total, pending, nil
+}
+
+// parseRestoreHeader interprets the S3 x-amz-restore header, e.g.
+// `ongoing-request="true"` or `ongoing-request="false", expiry-date="..."`.
+// An empty header means no restore was requested for the object.
+func parseRestoreHeader(v string) (requested, ongoing bool) {
+	if v == "" {
+		return false, false
+	}
+	return true, strings.Contains(v, `ongoing-request="true"`)
 }
 
 func (m *Manager) setStatus(ctx context.Context, jobID int64, status, errMsg string) {
