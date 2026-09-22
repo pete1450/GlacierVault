@@ -251,18 +251,19 @@ The application:
 ```text
 Lookup Snapshot
     ↓
-Determine Required Packs
+rustic restore --warm-up-command "warmup-s3-archives %paths" --warm-up-batch 1000
     ↓
-Execute Warmup
+rustic determines the exact pack set the snapshot needs
     ↓
-Submit Glacier Retrieval Requests
+warmup-s3-archives submits S3 Batch restore jobs (BULK tier, cheapest)
+    and blocks until Glacier has the packs available
     ↓
-Wait for Retrieval Completion
-    ↓
-Execute Rustic Restore
+rustic downloads and restores the files
 ```
 
-Only this stage interacts with Glacier storage.
+Only this stage interacts with Glacier storage. The warmup tool reads its
+config (`warmup-s3-archives-config.toml`, generated per restore job) from
+the restore process's working directory.
 
 ---
 

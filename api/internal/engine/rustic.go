@@ -129,8 +129,20 @@ func (e *Engine) run(ctx context.Context, buf *RingBuffer, args ...string) ([]by
 
 // runStreaming runs rustic and writes each output line to buf, returning combined output.
 func (e *Engine) runStreaming(ctx context.Context, buf *RingBuffer, args ...string) ([]byte, error) {
+	return e.runStreamingWith(ctx, buf, nil, "", args...)
+}
+
+// runStreamingWith is runStreaming with extra environment and an optional
+// working directory for the child process.
+func (e *Engine) runStreamingWith(ctx context.Context, buf *RingBuffer, env []string, dir string, args ...string) ([]byte, error) {
 	cmdArgs := append(e.baseArgs(), args...)
 	cmd := exec.CommandContext(ctx, rusticBin, cmdArgs...)
+	if len(env) > 0 {
+		cmd.Env = env
+	}
+	if dir != "" {
+		cmd.Dir = dir
+	}
 
 	pr, pw, err := os.Pipe()
 	if err != nil {
@@ -197,16 +209,41 @@ func (e *Engine) RunBackup(ctx context.Context, buf *RingBuffer, sourcePaths []s
 
 // ListSnapshots returns all snapshots from the repository.
 //
-// rustic's `snapshots --json` emits snapshots grouped by (hostname, label,
-// paths) as [[group, [snapshots...]], ...]; we flatten all groups into one
-// list. A plain flat array is accepted as a fallback.
+// `snapshots --json` grouping format has changed across rustic versions:
+//   - rustic 0.11+: [{"group_key": {...}, "snapshots": [...]}, ...]
+//   - rustic 0.9.x:  [[group, [snapshots...]], ...]
+// A plain flat array is accepted as a final fallback. All shapes are
+// flattened into one list.
 func (e *Engine) ListSnapshots(ctx context.Context) ([]Snapshot, error) {
 	out, err := e.run(ctx, nil, "snapshots", "--json")
 	if err != nil {
 		return nil, err
 	}
+	return parseSnapshots(out)
+}
 
-	// Try the grouped format first.
+// parseSnapshots flattens `snapshots --json` output into one snapshot list.
+// See ListSnapshots for the version-dependent shapes handled.
+func parseSnapshots(out []byte) ([]Snapshot, error) {
+	var groups11 []struct {
+		Snapshots []Snapshot `json:"snapshots"`
+	}
+	if err := json.Unmarshal(out, &groups11); err == nil && groups11 != nil {
+		var snaps []Snapshot
+		ok := true
+		for _, g := range groups11 {
+			if g.Snapshots == nil {
+				ok = false
+				break
+			}
+			snaps = append(snaps, g.Snapshots...)
+		}
+		if ok {
+			return snaps, nil
+		}
+	}
+
+	// Shape 2: rustic 0.9.x grouped [group, [snapshots]] pairs.
 	var groups []json.RawMessage
 	if err := json.Unmarshal(out, &groups); err != nil {
 		return nil, fmt.Errorf("parse snapshots: %w", err)
@@ -297,13 +334,39 @@ func pathsToEntries(paths []string) []FileEntry {
 	return entries
 }
 
+// RestoreOptions carries the Glacier warm-up configuration for RunRestore.
+type RestoreOptions struct {
+	// Warmup enables the warm-up phase via the warmup-s3-archives tool,
+	// invoked as rustic's --warm-up-command.
+	Warmup bool
+	// Env is extra environment for the rustic process. The warmup tool
+	// resolves AWS credentials on its own (rustic does not pass its
+	// backend credentials through), so AWS_* must be present here.
+	Env []string
+	// Dir is the working directory for the rustic process.
+	// warmup-s3-archives reads warmup-s3-archives-config.toml from it.
+	Dir string
+}
+
 // RunRestore executes rustic restore for a snapshot to destination.
-func (e *Engine) RunRestore(ctx context.Context, buf *RingBuffer, snapshotID, destination string, paths []string) error {
-	args := []string{"restore", snapshotID, "--target", destination}
+//
+// Destination is positional (rustic has no --target flag). When
+// opts.Warmup is set, rustic warms the needed data packs first by invoking
+// `warmup-s3-archives` with the S3 keys of the needed packs in batches;
+// the tool submits S3 Batch restore jobs and blocks until Glacier has the
+// packs available, then rustic proceeds with the download.
+func (e *Engine) RunRestore(ctx context.Context, buf *RingBuffer, snapshotID, destination string, paths []string, opts RestoreOptions) error {
+	args := []string{"restore", snapshotID, destination}
 	for _, p := range paths {
 		args = append(args, "--glob", p)
 	}
-	_, err := e.runStreaming(ctx, buf, args...)
+	if opts.Warmup {
+		args = append(args,
+			"--warm-up-command", "warmup-s3-archives %paths",
+			"--warm-up-batch", "1000",
+		)
+	}
+	_, err := e.runStreamingWith(ctx, buf, opts.Env, opts.Dir, args...)
 	return err
 }
 

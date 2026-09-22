@@ -1,39 +1,33 @@
 package restore
 
 import (
-	"bufio"
 	"context"
 	"database/sql"
 	"fmt"
 	"log"
 	"os"
-	"os/exec"
+	"path/filepath"
 	"strings"
-	"sync"
 	"time"
-
-	"github.com/aws/aws-sdk-go-v2/aws"
-	awsconfig "github.com/aws/aws-sdk-go-v2/config"
-	"github.com/aws/aws-sdk-go-v2/credentials"
-	"github.com/aws/aws-sdk-go-v2/service/s3"
 
 	appCrypto "github.com/glaciervault/api/internal/crypto"
 	"github.com/glaciervault/api/internal/engine"
 )
 
-const warmupBin = "warmup-s3-archives"
+// Retrieval tuning. Glacier Deep Archive Bulk tier restores can take up to
+// 48 hours, so the overall restore deadline covers the worst case plus
+// download time with margin.
+const restoreTimeout = 72 * time.Hour
 
-// Retrieval wait tuning. Glacier Deep Archive standard retrieval SLA is
-// 12-48 hours, so the timeout covers the worst case with margin.
-const (
-	restorePollInterval = 30 * time.Minute
-	restoreTimeout      = 48 * time.Hour
-	// Time allowed for warmup-submitted restore requests to become visible
-	// via head-object before we conclude nothing was requested.
-	restoreGracePeriod = 30 * time.Minute
-	// Number of concurrent head-object calls per status check.
-	headWorkers = 16
-)
+// GlacierJobTier selects the S3 restore tier used by warmup-s3-archives.
+// BULK is the cheapest option (~8-10x cheaper than STANDARD) at the cost of
+// up to a 48-hour wait. The tool expects the all-caps AWS tier name.
+const glacierJobTier = "BULK"
+
+// restoredCopyDays is how long the temporarily restored S3 Standard copy of
+// each pack is kept. The download starts immediately after the warmup phase,
+// so a small window is enough.
+const restoredCopyDays = 2
 
 // Status values for restore_jobs.
 const (
@@ -83,6 +77,11 @@ func (m *Manager) Initiate(ctx context.Context, snapshotRowID int64, requestedPa
 }
 
 func (m *Manager) run(ctx context.Context, jobID, snapshotRowID int64, paths []string, destination string) error {
+	// Overall deadline: Bulk tier restores can take up to 48h. Restarting a
+	// timed-out restore is safe — the warmup tool is idempotent.
+	ctx, cancel := context.WithTimeout(ctx, restoreTimeout)
+	defer cancel()
+
 	// Look up rustic snapshot ID.
 	var rusticID string
 	row := m.db.QueryRowContext(ctx, `SELECT snapshot_id FROM snapshots WHERE id = ?`, snapshotRowID)
@@ -90,30 +89,35 @@ func (m *Manager) run(ctx context.Context, jobID, snapshotRowID int64, paths []s
 		return fmt.Errorf("lookup snapshot: %w", err)
 	}
 
-	// Step 1: Warmup (submit Glacier retrieval requests).
+	// Render the warmup tool config into a per-job working directory.
+	workDir, err := m.writeWarmupConfig(ctx, jobID)
+	if err != nil {
+		return fmt.Errorf("write warmup config: %w", err)
+	}
+	defer os.RemoveAll(workDir)
+
+	// AWS credentials for the warmup tool, which resolves credentials on
+	// its own (rustic does not pass its backend credentials through).
+	env, err := m.awsEnv(ctx)
+	if err != nil {
+		return err
+	}
+
+	// Single rustic invocation: it computes the exact pack set the snapshot
+	// needs, warms those packs via warmup-s3-archives (which submits S3
+	// Batch restore jobs and blocks until Glacier has them available), then
+	// downloads and restores. Only needed packs are warmed, which keeps
+	// retrieval as cheap as possible.
 	m.setStatus(ctx, jobID, StatusWarmupRequested, "")
-	if err := m.executeWarmup(ctx, jobID, rusticID); err != nil {
-		return fmt.Errorf("warmup: %w", err)
-	}
-	m.db.ExecContext(ctx, `UPDATE restore_jobs SET warmup_status='completed' WHERE id=?`, jobID)
-
-	// Step 2: Wait until every data pack with a pending restore request
-	// reports ongoing-request="false" via head-object.
-	m.setStatus(ctx, jobID, StatusRetrievalInProgress, "")
-	m.db.ExecContext(ctx, `UPDATE restore_jobs SET retrieval_started_at=? WHERE id=?`, time.Now().UTC(), jobID)
-
-	if err := m.waitForRestore(ctx, jobID); err != nil {
-		return fmt.Errorf("wait for retrieval: %w", err)
-	}
-
-	m.setStatus(ctx, jobID, StatusRetrievalComplete, "")
-
-	// Step 3: Execute rustic restore.
-	m.setStatus(ctx, jobID, StatusRestoring, "")
-	m.db.ExecContext(ctx, `UPDATE restore_jobs SET restore_started_at=? WHERE id=?`, time.Now().UTC(), jobID)
-
 	buf := engine.GetBuffer(jobID)
-	if err := m.engine.RunRestore(ctx, buf, rusticID, destination, paths); err != nil {
+	buf.Write("[restore] warming needed packs via warmup-s3-archives " +
+		"(Bulk tier, cheapest; Glacier can take up to 48h)...")
+
+	if err := m.engine.RunRestore(ctx, buf, rusticID, destination, paths, engine.RestoreOptions{
+		Warmup: true,
+		Env:    env,
+		Dir:    workDir,
+	}); err != nil {
 		return fmt.Errorf("rustic restore: %w", err)
 	}
 
@@ -122,39 +126,49 @@ func (m *Manager) run(ctx context.Context, jobID, snapshotRowID int64, paths []s
 	return nil
 }
 
-// executeWarmup invokes the warmup-s3-archives binary with the snapshot ID.
-// AWS credentials are injected into its environment: the container does not
-// have them in its ambient environment.
-func (m *Manager) executeWarmup(ctx context.Context, jobID int64, rusticSnapshotID string) error {
-	env, err := m.awsEnv(ctx)
+// writeWarmupConfig renders warmup-s3-archives-config.toml into a fresh
+// per-job directory and returns the directory path. The warmup tool reads
+// its config from the working directory it is invoked in, so the restore
+// process runs with this directory as its working directory.
+func (m *Manager) writeWarmupConfig(ctx context.Context, jobID int64) (string, error) {
+	s, err := m.loadWarmupSettings(ctx)
 	if err != nil {
-		return err
+		return "", err
 	}
-	cmd := exec.CommandContext(ctx, warmupBin, "restore", rusticSnapshotID)
-	cmd.Env = env
 
-	pr, pw, err := os.Pipe()
+	cfg := fmt.Sprintf(`# Generated by GlacierVault for restore job %d. Do not edit.
+[aws_resources]
+account_id = %q
+cold_bucket_name = %q
+batch_manifests_bucket_name = %q
+batch_reports_bucket_name = %q
+batch_role_arn = %q
+restore_queue_url = %q
+
+[initiate_restore_object]
+expiration_in_days = %d
+glacier_job_tier = %q
+`,
+		jobID,
+		s.accountID,
+		s.coldBucket,
+		s.batchManifestsBucket,
+		s.batchReportsBucket,
+		s.batchRoleArn,
+		s.restoreQueueURL,
+		restoredCopyDays,
+		glacierJobTier,
+	)
+
+	dir, err := os.MkdirTemp("", fmt.Sprintf("glaciervault-restore-%d-", jobID))
 	if err != nil {
-		return err
+		return "", err
 	}
-	cmd.Stdout = pw
-	cmd.Stderr = pw
-
-	buf := engine.GetBuffer(jobID)
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		scanner := bufio.NewScanner(pr)
-		for scanner.Scan() {
-			buf.Write("[warmup] " + scanner.Text())
-		}
-	}()
-
-	runErr := cmd.Run()
-	pw.Close()
-	<-done
-	pr.Close()
-	return runErr
+	if err := os.WriteFile(filepath.Join(dir, "warmup-s3-archives-config.toml"), []byte(cfg), 0600); err != nil {
+		os.RemoveAll(dir)
+		return "", err
+	}
+	return dir, nil
 }
 
 // awsSettings holds the decrypted deployment credentials plus the cold bucket.
@@ -163,6 +177,16 @@ type awsSettings struct {
 	accessKey  string
 	secretKey  string
 	coldBucket string
+}
+
+// warmupSettings holds everything warmup-s3-archives needs in its config file.
+type warmupSettings struct {
+	accountID            string
+	coldBucket           string
+	batchManifestsBucket string
+	batchReportsBucket   string
+	batchRoleArn         string
+	restoreQueueURL      string
 }
 
 // loadAWSSettings reads and decrypts the deployment's AWS configuration.
@@ -187,6 +211,34 @@ func (m *Manager) loadAWSSettings(ctx context.Context) (*awsSettings, error) {
 	return &s, nil
 }
 
+// loadWarmupSettings reads the deployment values needed for
+// warmup-s3-archives-config.toml. Deployments provisioned before these
+// columns existed must re-run setup to populate them.
+func (m *Manager) loadWarmupSettings(ctx context.Context) (*warmupSettings, error) {
+	var s warmupSettings
+	var acctID, manifests, reports, roleArn, queueURL sql.NullString
+	err := m.db.QueryRowContext(ctx,
+		`SELECT account_id, cold_bucket, batch_manifests_bucket, batch_reports_bucket, batch_role_arn, sqs_url
+		 FROM aws_config WHERE id=1`,
+	).Scan(&acctID, &s.coldBucket, &manifests, &reports, &roleArn, &queueURL)
+	if err != nil {
+		return nil, fmt.Errorf("load aws config: %w", err)
+	}
+	s.accountID, s.batchManifestsBucket, s.batchReportsBucket = acctID.String, manifests.String, reports.String
+	s.batchRoleArn, s.restoreQueueURL = roleArn.String, queueURL.String
+	for name, v := range map[string]string{
+		"account_id": s.accountID, "cold_bucket": s.coldBucket,
+		"batch_manifests_bucket": s.batchManifestsBucket,
+		"batch_reports_bucket": s.batchReportsBucket,
+		"batch_role_arn": s.batchRoleArn, "restore queue url": s.restoreQueueURL,
+	} {
+		if v == "" {
+			return nil, fmt.Errorf("aws_config.%s is empty — re-run setup to provision the warmup infrastructure", name)
+		}
+	}
+	return &s, nil
+}
+
 // awsEnv returns the process environment plus the deployment's AWS
 // credentials, for subprocesses (warmup tool) that need them.
 func (m *Manager) awsEnv(ctx context.Context) ([]string, error) {
@@ -197,148 +249,11 @@ func (m *Manager) awsEnv(ctx context.Context) ([]string, error) {
 	return append(os.Environ(),
 		"AWS_ACCESS_KEY_ID="+s.accessKey,
 		"AWS_SECRET_ACCESS_KEY="+s.secretKey,
+		// The Rust AWS SDK (warmup tool) reads AWS_REGION; AWS CLI-style
+		// tooling reads AWS_DEFAULT_REGION. Set both.
+		"AWS_REGION="+s.region,
 		"AWS_DEFAULT_REGION="+s.region,
 	), nil
-}
-
-// s3Client builds an S3 client authenticated as the deployment's IAM user.
-func (m *Manager) s3Client(ctx context.Context) (*s3.Client, string, error) {
-	s, err := m.loadAWSSettings(ctx)
-	if err != nil {
-		return nil, "", err
-	}
-	cfg, err := awsconfig.LoadDefaultConfig(ctx,
-		awsconfig.WithRegion(s.region),
-		awsconfig.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(s.accessKey, s.secretKey, "")),
-	)
-	if err != nil {
-		return nil, "", fmt.Errorf("load aws sdk config: %w", err)
-	}
-	return s3.NewFromConfig(cfg), s.coldBucket, nil
-}
-
-// waitForRestore polls head-object on every data pack in the cold bucket
-// until all packs with a restore request report ongoing-request="false".
-// This is exact: unlike the old "first SQS event wins" approach, a snapshot
-// restore is not considered complete until every pack is actually available.
-func (m *Manager) waitForRestore(ctx context.Context, jobID int64) error {
-	client, bucket, err := m.s3Client(ctx)
-	if err != nil {
-		return err
-	}
-	buf := engine.GetBuffer(jobID)
-	deadline := time.Now().Add(restoreTimeout)
-	graceUntil := time.Now().Add(restoreGracePeriod)
-
-	for {
-		done, total, pending, err := m.restoreComplete(ctx, client, bucket)
-		switch {
-		case err != nil:
-			buf.Write(fmt.Sprintf("[restore] status check failed: %v (retrying)", err))
-		case done:
-			buf.Write(fmt.Sprintf("[restore] all %d packs available", total))
-			return nil
-		case total == 0:
-			buf.Write("[restore] waiting for restore requests to register...")
-			if time.Now().After(graceUntil) {
-				return fmt.Errorf("no restore requests detected %v after warmup — warmup may have failed", restoreGracePeriod)
-			}
-		default:
-			buf.Write(fmt.Sprintf("[restore] %d of %d packs still restoring...", pending, total))
-		}
-
-		if time.Now().After(deadline) {
-			return fmt.Errorf("retrieval timeout: exceeded %v", restoreTimeout)
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(restorePollInterval):
-		}
-	}
-}
-
-// restoreComplete lists data packs in the cold bucket and heads each one.
-// Packs with no restore header were not requested by this warmup and are
-// skipped; done is true only when at least one pack was requested and none
-// are still restoring.
-func (m *Manager) restoreComplete(ctx context.Context, client *s3.Client, bucket string) (done bool, total, pending int, err error) {
-	// Rustic stores data packs under data/ in the cold repository.
-	var keys []string
-	paginator := s3.NewListObjectsV2Paginator(client, &s3.ListObjectsV2Input{
-		Bucket: aws.String(bucket),
-		Prefix: aws.String("data/"),
-	})
-	for paginator.HasMorePages() {
-		page, err := paginator.NextPage(ctx)
-		if err != nil {
-			return false, 0, 0, fmt.Errorf("list objects: %w", err)
-		}
-		for _, obj := range page.Contents {
-			keys = append(keys, aws.ToString(obj.Key))
-		}
-	}
-
-	type headResult struct {
-		requested bool
-		ongoing   bool
-		err       error
-	}
-	jobs := make(chan string)
-	results := make(chan headResult, len(keys))
-	var wg sync.WaitGroup
-	for w := 0; w < headWorkers; w++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for key := range jobs {
-				head, err := client.HeadObject(ctx, &s3.HeadObjectInput{
-					Bucket: aws.String(bucket),
-					Key:    aws.String(key),
-				})
-				if err != nil {
-					results <- headResult{err: fmt.Errorf("head %s: %w", key, err)}
-					continue
-				}
-				requested, ongoing := parseRestoreHeader(aws.ToString(head.Restore))
-				results <- headResult{requested: requested, ongoing: ongoing}
-			}
-		}()
-	}
-	go func() {
-		for _, k := range keys {
-			jobs <- k
-		}
-		close(jobs)
-	}()
-	go func() {
-		wg.Wait()
-		close(results)
-	}()
-
-	for r := range results {
-		if r.err != nil {
-			return false, 0, 0, r.err
-		}
-		if !r.requested {
-			continue
-		}
-		total++
-		if r.ongoing {
-			pending++
-		}
-	}
-	return total > 0 && pending == 0, total, pending, nil
-}
-
-// parseRestoreHeader interprets the S3 x-amz-restore header, e.g.
-// `ongoing-request="true"` or `ongoing-request="false", expiry-date="..."`.
-// An empty header means no restore was requested for the object.
-func parseRestoreHeader(v string) (requested, ongoing bool) {
-	if v == "" {
-		return false, false
-	}
-	return true, strings.Contains(v, `ongoing-request="true"`)
 }
 
 func (m *Manager) setStatus(ctx context.Context, jobID int64, status, errMsg string) {

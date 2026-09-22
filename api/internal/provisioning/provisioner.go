@@ -39,11 +39,13 @@ func Estimate() ResourceEstimate {
 
 // StackOutputs holds the values parsed from CloudFormation outputs after deploy.
 type StackOutputs struct {
-	HotBucket    string `json:"hotBucket"`
-	ColdBucket   string `json:"coldBucket"`
-	SQSUrl       string `json:"sqsUrl"`
-	IAMUser      string `json:"iamUser"`
-	BatchRoleArn string `json:"batchRoleArn"`
+	HotBucket            string `json:"hotBucket"`
+	ColdBucket           string `json:"coldBucket"`
+	BatchManifestsBucket string `json:"batchManifestsBucket"`
+	BatchReportsBucket   string `json:"batchReportsBucket"`
+	SQSUrl               string `json:"sqsUrl"`
+	IAMUser              string `json:"iamUser"`
+	BatchRoleArn         string `json:"batchRoleArn"`
 }
 
 // Provisioner orchestrates CDK deploy.
@@ -55,13 +57,17 @@ type Provisioner struct {
 	LogFn     func(line string) // called for each CDK output line
 }
 
-// Bootstrap runs `cdk bootstrap aws://<account>/<region>`.
-func (p *Provisioner) Bootstrap(ctx context.Context) error {
+// Bootstrap runs `cdk bootstrap aws://<account>/<region>` and returns the
+// resolved AWS account ID, which is persisted for the warmup tool config.
+func (p *Provisioner) Bootstrap(ctx context.Context) (string, error) {
 	accountID, err := p.getAccountID(ctx)
 	if err != nil {
-		return fmt.Errorf("resolve account ID: %w", err)
+		return "", fmt.Errorf("resolve account ID: %w", err)
 	}
-	return p.runCDK(ctx, "bootstrap", "--force", fmt.Sprintf("aws://%s/%s", accountID, p.Region))
+	if err := p.runCDK(ctx, "bootstrap", "--force", fmt.Sprintf("aws://%s/%s", accountID, p.Region)); err != nil {
+		return "", err
+	}
+	return accountID, nil
 }
 
 // getAccountID calls STS GetCallerIdentity to resolve the AWS account ID.
@@ -126,6 +132,10 @@ func (p *Provisioner) fetchStackResources(ctx context.Context) (*StackOutputs, e
 			so.HotBucket = pid
 		case strings.HasPrefix(lid, "coldbucket") && aws.ToString(r.ResourceType) == "AWS::S3::Bucket":
 			so.ColdBucket = pid
+		case strings.HasPrefix(lid, "batchmanifestsbucket") && aws.ToString(r.ResourceType) == "AWS::S3::Bucket":
+			so.BatchManifestsBucket = pid
+		case strings.HasPrefix(lid, "batchreportsbucket") && aws.ToString(r.ResourceType) == "AWS::S3::Bucket":
+			so.BatchReportsBucket = pid
 		case strings.HasPrefix(lid, "coldeventsqueue") && aws.ToString(r.ResourceType) == "AWS::SQS::Queue":
 			so.SQSUrl = pid
 		case strings.HasPrefix(lid, "user") && aws.ToString(r.ResourceType) == "AWS::IAM::User":
@@ -135,7 +145,7 @@ func (p *Provisioner) fetchStackResources(ctx context.Context) (*StackOutputs, e
 		}
 	}
 
-	if so.HotBucket == "" || so.ColdBucket == "" {
+	if so.HotBucket == "" || so.ColdBucket == "" || so.BatchManifestsBucket == "" || so.BatchReportsBucket == "" {
 		return nil, fmt.Errorf("stack %s deployed but expected resources not found — check logical IDs", p.StackName)
 	}
 	return so, nil

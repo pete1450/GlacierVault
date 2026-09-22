@@ -294,12 +294,15 @@ func (s *Server) handleDeploy(w http.ResponseWriter, r *http.Request) {
 		}
 
 		buf.Write("Bootstrapping CDK...")
-		if err := p.Bootstrap(ctx); err != nil {
+		accountID, err := p.Bootstrap(ctx)
+		if err != nil {
 			buf.Write("[error] bootstrap: " + err.Error())
 			s.DB.ExecContext(ctx, `UPDATE backup_jobs SET status='failed', error_message=?, completed_at=? WHERE id=?`,
 				err.Error(), time.Now().UTC(), jobID)
 			return
 		}
+
+		s.DB.ExecContext(ctx, `UPDATE aws_config SET account_id=? WHERE id=1`, accountID)
 
 		buf.Write("Deploying stack...")
 		outputs, err := p.Deploy(ctx)
@@ -328,9 +331,11 @@ func (s *Server) handleDeploy(w http.ResponseWriter, r *http.Request) {
 		time.Sleep(15 * time.Second)
 
 		s.DB.ExecContext(ctx, `
-			UPDATE aws_config SET hot_bucket=?, cold_bucket=?, sqs_url=?, iam_user=?, batch_role_arn=?, deployed_at=?
+			UPDATE aws_config SET hot_bucket=?, cold_bucket=?, batch_manifests_bucket=?, batch_reports_bucket=?,
+				sqs_url=?, iam_user=?, batch_role_arn=?, deployed_at=?
 			WHERE id=1`,
-			outputs.HotBucket, outputs.ColdBucket, outputs.SQSUrl, outputs.IAMUser, outputs.BatchRoleArn, time.Now().UTC(),
+			outputs.HotBucket, outputs.ColdBucket, outputs.BatchManifestsBucket, outputs.BatchReportsBucket,
+			outputs.SQSUrl, outputs.IAMUser, outputs.BatchRoleArn, time.Now().UTC(),
 		)
 
 		// Write rustic config and generate repo password.
