@@ -81,9 +81,14 @@ func (p *Provisioner) getAccountID(ctx context.Context) (string, error) {
 }
 
 // Deploy runs `cdk deploy` then reads resource physical IDs via CloudFormation.
+// The stack name is passed through CDK context (`-c stack-name=...`) because
+// the upstream glacier-cold-storage-cdk app reads its stack name from
+// cdk.json's `.context.stack-name` — a positional `cdk deploy <name>` arg is
+// only a selector and cannot rename the synthesized stack.
 func (p *Provisioner) Deploy(ctx context.Context) (*StackOutputs, error) {
 	if err := p.runCDK(ctx, "deploy",
 		"--require-approval", "never",
+		"-c", "stack-name="+p.StackName,
 		p.StackName,
 	); err != nil {
 		return nil, err
