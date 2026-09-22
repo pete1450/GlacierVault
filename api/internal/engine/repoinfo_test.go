@@ -25,6 +25,30 @@ func TestParseRepoInfoJSON_ArrayShape(t *testing.T) {
 	}
 }
 
+func TestParseRepoInfoJSON_Rustic094Shape(t *testing.T) {
+	// Actual `rustic repoinfo --json` output from rustic 0.9.4: files.repo
+	// is an array of {tpe,count,size}; there is no "total" entry.
+	out := []byte(`{"files": {"repo": [
+		{"tpe": "key", "count": 1, "size": 363},
+		{"tpe": "snapshot", "count": 12, "size": 6041},
+		{"tpe": "index", "count": 3, "size": 5734},
+		{"tpe": "pack", "count": 5, "size": 54001664}
+	]}, "index": {}}`)
+	info, ok := parseRepoInfoJSON(out)
+	if !ok {
+		t.Fatal("expected ok=true")
+	}
+	if info.TotalBytes != 54001664+5734+6041+363 {
+		t.Fatalf("total=%d", info.TotalBytes)
+	}
+	if info.PackBytes != 54001664 {
+		t.Fatalf("pack=%d", info.PackBytes)
+	}
+	if info.SnapshotCount != 12 {
+		t.Fatalf("snapshots=%d", info.SnapshotCount)
+	}
+}
+
 func TestParseRepoInfoJSON_ObjectShape(t *testing.T) {
 	out := []byte(`{"files": {
 		"key": {"count": 1, "total_size": 363},

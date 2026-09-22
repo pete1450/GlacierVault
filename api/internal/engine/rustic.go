@@ -164,9 +164,23 @@ func (e *Engine) runStreaming(ctx context.Context, buf *RingBuffer, args ...stri
 	return output.Bytes(), nil
 }
 
+// Pack size targets for newly initialized repositories. Larger packs mean
+// fewer objects in the cold bucket: fewer PUTs at backup time, less
+// per-object metadata overhead (Deep Archive bills ~40 KiB per object), and
+// fewer restore requests when retrieving. Tradeoffs: higher memory use during
+// backup (rustic buffers whole packs, several in parallel) and coarser
+// restore granularity for partial restores. The grow factor still increases
+// these targets automatically as the repository grows.
+const (
+	defaultDataPackSize = "512MiB"
+	defaultTreePackSize = "32MiB"
+)
+
 // InitRepository runs rustic init for a new cold-storage repository.
 func (e *Engine) InitRepository(ctx context.Context, buf *RingBuffer) error {
-	_, err := e.runStreaming(ctx, buf, "init")
+	_, err := e.runStreaming(ctx, buf, "init",
+		"--set-datapack-size", defaultDataPackSize,
+		"--set-treepack-size", defaultTreePackSize)
 	return err
 }
 
@@ -391,6 +405,9 @@ func parseFileStats(raw json.RawMessage) map[string]int64 {
 	if err := json.Unmarshal(raw, &arr); err == nil {
 		for _, e := range arr {
 			typ := unquote(e["type"])
+			if typ == "" {
+				typ = unquote(e["tpe"]) // rustic 0.9.x uses "tpe"
+			}
 			size := firstInt64(e, "size", "total_size", "bytes", "total_bytes")
 			count := firstInt64(e, "count")
 			if typ != "" {
@@ -398,6 +415,13 @@ func parseFileStats(raw json.RawMessage) map[string]int64 {
 			}
 		}
 		return flattenStats(m)
+	}
+	// Shape 1b: {"repo": [...]} — the actual rustic 0.9.4 repoinfo schema.
+	var wrapper map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &wrapper); err == nil {
+		if repoRaw, ok := wrapper["repo"]; ok {
+			return parseFileStats(repoRaw)
+		}
 	}
 	// Shape 2: object keyed by type, values with size/count fields.
 	var obj map[string]map[string]json.RawMessage
