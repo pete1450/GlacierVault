@@ -1,5 +1,5 @@
 # ── Stage 1: Build Go API ───────────────────────────────────────────────────
-FROM golang:1.22-bookworm AS go-builder
+FROM golang:1.25-trixie AS go-builder
 
 WORKDIR /build/api
 COPY api/go.mod ./
@@ -9,7 +9,7 @@ RUN go mod tidy && go mod download
 RUN CGO_ENABLED=1 GOOS=linux go build -o /out/glaciervault-api ./cmd/server
 
 # ── Stage 2: Build Next.js frontend ─────────────────────────────────────────
-FROM node:20-bookworm-slim AS frontend-builder
+FROM node:24-trixie-slim AS frontend-builder
 
 WORKDIR /build/frontend
 COPY frontend/package*.json ./
@@ -21,7 +21,7 @@ ENV NEXT_TELEMETRY_DISABLED=1
 RUN npm run build
 
 # ── Stage 3: Runtime image ───────────────────────────────────────────────────
-FROM debian:bookworm-slim
+FROM debian:trixie-slim
 
 # Core runtime dependencies.
 RUN apt-get update && apt-get install -y --no-install-recommends \
