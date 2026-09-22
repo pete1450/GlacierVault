@@ -226,6 +226,12 @@ func (m *Manager) loadWarmupSettings(ctx context.Context) (*warmupSettings, erro
 	}
 	s.accountID, s.batchManifestsBucket, s.batchReportsBucket = acctID.String, manifests.String, reports.String
 	s.batchRoleArn, s.restoreQueueURL = roleArn.String, queueURL.String
+	// Deployments provisioned before the ARN fix stored the bare IAM role
+	// name instead of the ARN. The CDK stack creates the role with the
+	// default path, so arn:aws:iam::<account>:role/<name> is exact.
+	if s.batchRoleArn != "" && !strings.HasPrefix(s.batchRoleArn, "arn:") {
+		s.batchRoleArn = fmt.Sprintf("arn:aws:iam::%s:role/%s", s.accountID, s.batchRoleArn)
+	}
 	for name, v := range map[string]string{
 		"account_id": s.accountID, "cold_bucket": s.coldBucket,
 		"batch_manifests_bucket": s.batchManifestsBucket,

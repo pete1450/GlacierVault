@@ -12,6 +12,7 @@ import (
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/cloudformation"
+	"github.com/aws/aws-sdk-go-v2/service/iam"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
 )
 
@@ -143,6 +144,19 @@ func (p *Provisioner) fetchStackResources(ctx context.Context) (*StackOutputs, e
 		case strings.HasPrefix(lid, "s3batchrole") && aws.ToString(r.ResourceType) == "AWS::IAM::Role":
 			so.BatchRoleArn = pid
 		}
+	}
+
+	// The physical ID of an IAM role is its name, not its ARN — but the
+	// warmup tool needs the ARN, so resolve it via IAM.
+	if so.BatchRoleArn != "" {
+		iamClient := iam.NewFromConfig(cfg)
+		roleOut, err := iamClient.GetRole(ctx, &iam.GetRoleInput{
+			RoleName: aws.String(so.BatchRoleArn),
+		})
+		if err != nil {
+			return nil, fmt.Errorf("resolve batch role ARN: %w", err)
+		}
+		so.BatchRoleArn = aws.ToString(roleOut.Role.Arn)
 	}
 
 	if so.HotBucket == "" || so.ColdBucket == "" || so.BatchManifestsBucket == "" || so.BatchReportsBucket == "" {
