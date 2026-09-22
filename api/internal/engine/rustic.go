@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"sync"
 )
@@ -290,4 +291,247 @@ func (e *Engine) RunRestore(ctx context.Context, buf *RingBuffer, snapshotID, de
 	}
 	_, err := e.runStreaming(ctx, buf, args...)
 	return err
+}
+
+// RepoInfo summarizes repository storage usage.
+type RepoInfo struct {
+	// TotalBytes is the size of all files in the repository (packs + index +
+	// snapshots + keys). This is the billed storage footprint.
+	TotalBytes int64 `json:"totalBytes"`
+	// PackBytes is the size of data/tree pack files, the bulk of the storage.
+	PackBytes int64 `json:"packBytes"`
+	// IndexBytes is the size of index files.
+	IndexBytes int64 `json:"indexBytes"`
+	// SnapshotCount is the number of snapshots in the repository.
+	SnapshotCount int64 `json:"snapshotCount"`
+}
+
+// ForgetSnapshot removes a single snapshot from the repository by rustic ID.
+// When prune is true, `forget --prune` runs the prune step automatically,
+// reclaiming space from data that is no longer referenced by any snapshot.
+func (e *Engine) ForgetSnapshot(ctx context.Context, snapshotID string, prune bool) error {
+	args := []string{"forget", snapshotID}
+	if prune {
+		args = append(args, "--prune")
+	}
+	_, err := e.run(ctx, nil, args...)
+	return err
+}
+
+// PruneRepo removes unreferenced data and repacks pack files.
+func (e *Engine) PruneRepo(ctx context.Context) error {
+	_, err := e.run(ctx, nil, "prune")
+	return err
+}
+
+// GetRepoInfo returns repository storage statistics.
+//
+// It runs `rustic repoinfo --json` (available since rustic 0.6.0). The exact
+// JSON schema is not stable across versions, so parsing is deliberately
+// tolerant: several shapes are probed, and if JSON parsing yields nothing,
+// the human-readable table output is parsed as a fallback.
+func (e *Engine) GetRepoInfo(ctx context.Context) (RepoInfo, error) {
+	out, err := e.run(ctx, nil, "repoinfo", "--json")
+	if err != nil {
+		// Older rustic builds lack --json; fall back to text tables.
+		if tout, terr := e.run(ctx, nil, "repoinfo"); terr == nil {
+			return parseRepoInfoText(tout)
+		}
+		return RepoInfo{}, err
+	}
+	if info, ok := parseRepoInfoJSON(out); ok {
+		return info, nil
+	}
+	// JSON didn't yield anything useful; try the text tables.
+	tout, terr := e.run(ctx, nil, "repoinfo")
+	if terr != nil {
+		return RepoInfo{}, fmt.Errorf("parse repoinfo: unrecognized output")
+	}
+	return parseRepoInfoText(tout)
+}
+
+// parseRepoInfoJSON extracts RepoInfo from `repoinfo --json` output,
+// tolerating several schema shapes.
+func parseRepoInfoJSON(out []byte) (RepoInfo, bool) {
+	var doc map[string]json.RawMessage
+	if err := json.Unmarshal(out, &doc); err != nil {
+		return RepoInfo{}, false
+	}
+	var info RepoInfo
+	// "files" may be an array of {type,count,size} or an object keyed by type.
+	if raw, ok := doc["files"]; ok {
+		stats := parseFileStats(raw)
+		info.TotalBytes = stats["total"]
+		info.PackBytes = stats["pack"]
+		info.IndexBytes = stats["index"]
+		info.SnapshotCount = stats["snapshot_count"]
+		// Some schemas nest per-type objects without a "total" entry; sum parts.
+		if info.TotalBytes == 0 {
+			info.TotalBytes = info.PackBytes + info.IndexBytes + stats["key"] + stats["snapshot"]
+		}
+	}
+	if info.TotalBytes == 0 && info.PackBytes == 0 && info.SnapshotCount == 0 {
+		return RepoInfo{}, false
+	}
+	return info, true
+}
+
+// parseFileStats normalizes the "files" section of repoinfo --json into a
+// map from lower-cased file type to its size in bytes, and from type to
+// count. The returned map keys are "type:size" and "type:count".
+func parseFileStats(raw json.RawMessage) map[string]int64 {
+	m := map[string]int64{}
+	set := func(typ string, size, count int64) {
+		t := strings.ToLower(typ)
+		m[t+":size"] = size
+		m[t+":count"] = count
+	}
+	// Shape 1: array of {"type": ..., "count": ..., "size"|"total_size": ...}.
+	var arr []map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &arr); err == nil {
+		for _, e := range arr {
+			typ := unquote(e["type"])
+			size := firstInt64(e, "size", "total_size", "bytes", "total_bytes")
+			count := firstInt64(e, "count")
+			if typ != "" {
+				set(typ, size, count)
+			}
+		}
+		return flattenStats(m)
+	}
+	// Shape 2: object keyed by type, values with size/count fields.
+	var obj map[string]map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &obj); err == nil {
+		for typ, fields := range obj {
+			size := firstInt64(fields, "size", "total_size", "bytes", "total_bytes")
+			count := firstInt64(fields, "count")
+			set(typ, size, count)
+		}
+		return flattenStats(m)
+	}
+	return map[string]int64{}
+}
+
+func flattenStats(m map[string]int64) map[string]int64 {
+	out := map[string]int64{}
+	for k, v := range m {
+		parts := strings.SplitN(k, ":", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		if parts[1] == "size" {
+			out[parts[0]] = v
+		} else {
+			out[parts[0]+"_count"] = v
+		}
+	}
+	return out
+}
+
+func unquote(raw json.RawMessage) string {
+	var s string
+	if err := json.Unmarshal(raw, &s); err != nil {
+		return ""
+	}
+	return s
+}
+
+func firstInt64(fields map[string]json.RawMessage, keys ...string) int64 {
+	for _, k := range keys {
+		raw, ok := fields[k]
+		if !ok {
+			continue
+		}
+		var n int64
+		if err := json.Unmarshal(raw, &n); err == nil {
+			return n
+		}
+		var f float64
+		if err := json.Unmarshal(raw, &f); err == nil {
+			return int64(f)
+		}
+	}
+	return 0
+}
+
+// parseRepoInfoText parses the human-readable `rustic repoinfo` tables:
+//
+//	| File type | Count | Total Size |
+//	| Key       |     1 |      363 B |
+//	| Pack      |     5 |   51.5 MiB |
+//	| Total     |    21 |   51.5 MiB |
+func parseRepoInfoText(out []byte) (RepoInfo, error) {
+	var info RepoInfo
+	found := false
+	for _, line := range strings.Split(string(out), "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "|") || !strings.HasSuffix(line, "|") {
+			continue
+		}
+		cols := strings.Split(strings.Trim(line, "|"), "|")
+		if len(cols) < 3 {
+			continue
+		}
+		typ := strings.ToLower(strings.TrimSpace(cols[0]))
+		if typ == "file type" || strings.HasPrefix(typ, "---") {
+			continue
+		}
+		size, err := parseHumanSize(strings.TrimSpace(cols[2]))
+		if err != nil {
+			continue
+		}
+		count, _ := strconv.ParseInt(strings.TrimSpace(cols[1]), 10, 64)
+		switch typ {
+		case "total":
+			info.TotalBytes = size
+		case "pack":
+			info.PackBytes = size
+		case "index":
+			info.IndexBytes = size
+		case "snapshot":
+			info.SnapshotCount = count
+		}
+		found = true
+	}
+	if !found {
+		return RepoInfo{}, fmt.Errorf("parse repoinfo: no table rows found")
+	}
+	return info, nil
+}
+
+// parseHumanSize parses sizes like "363 B", "5.9 kiB", "51.5 MiB", "1.2 GiB".
+func parseHumanSize(s string) (int64, error) {
+	s = strings.TrimSpace(s)
+	if s == "" || s == "-" {
+		return 0, nil
+	}
+	// Split numeric part from unit.
+	i := 0
+	for i < len(s) && (s[i] == '.' || s[i] == ',' || (s[i] >= '0' && s[i] <= '9')) {
+		i++
+	}
+	numStr := strings.ReplaceAll(s[:i], ",", "")
+	unit := strings.ToLower(strings.TrimSpace(s[i:]))
+	f, err := strconv.ParseFloat(numStr, 64)
+	if err != nil {
+		return 0, fmt.Errorf("parse size %q: %w", s, err)
+	}
+	mult := 1.0
+	switch unit {
+	case "b", "byte", "bytes", "":
+		mult = 1
+	case "kib", "kb", "k":
+		mult = 1024
+	case "mib", "mb", "m":
+		mult = 1024 * 1024
+	case "gib", "gb", "g":
+		mult = 1024 * 1024 * 1024
+	case "tib", "tb", "t":
+		mult = 1024 * 1024 * 1024 * 1024
+	case "pib", "pb", "p":
+		mult = 1024 * 1024 * 1024 * 1024 * 1024
+	default:
+		return 0, fmt.Errorf("parse size %q: unknown unit", s)
+	}
+	return int64(f * mult), nil
 }

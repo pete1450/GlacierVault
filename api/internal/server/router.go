@@ -79,6 +79,11 @@ func (s *Server) Router() http.Handler {
 		r.Get("/api/snapshots", s.handleListSnapshots)
 		r.Get("/api/snapshots/{id}", s.handleGetSnapshot)
 		r.Get("/api/snapshots/{id}/files", s.handleSnapshotFiles)
+		r.Delete("/api/snapshots/{id}", s.handleDeleteSnapshot)
+
+		// Storage.
+		r.Get("/api/storage", s.handleGetStorage)
+		r.Post("/api/repo/prune", s.handlePruneRepo)
 
 		// Restores.
 		r.Post("/api/restores", s.handleInitiateRestore)
@@ -773,6 +778,80 @@ func (s *Server) handleSnapshotFiles(w http.ResponseWriter, r *http.Request) {
 		files = []map[string]interface{}{}
 	}
 	writeJSON(w, http.StatusOK, files)
+}
+
+// handleDeleteSnapshot removes a snapshot from the repository via
+// `rustic forget` and drops its catalog rows. With ?prune=true, the forget
+// also runs prune to reclaim unreferenced space.
+func (s *Server) handleDeleteSnapshot(w http.ResponseWriter, r *http.Request) {
+	rowID, _ := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	var rusticID string
+	if err := s.DB.QueryRowContext(r.Context(),
+		`SELECT snapshot_id FROM snapshots WHERE id=?`, rowID).Scan(&rusticID); err != nil {
+		writeError(w, http.StatusNotFound, "snapshot not found")
+		return
+	}
+
+	prune := r.URL.Query().Get("prune") == "true"
+	if rusticID != "" {
+		if err := s.Engine.ForgetSnapshot(r.Context(), rusticID, prune); err != nil {
+			writeError(w, http.StatusInternalServerError, fmt.Sprintf("forget snapshot: %v", err))
+			return
+		}
+	}
+
+	tx, err := s.DB.BeginTx(r.Context(), nil)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(r.Context(), `DELETE FROM file_index WHERE snapshot_id=?`, rowID); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if _, err := tx.ExecContext(r.Context(), `DELETE FROM snapshots WHERE id=?`, rowID); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if err := tx.Commit(); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{"deleted": true, "pruned": prune})
+}
+
+// handleGetStorage reports repository storage usage from `rustic repoinfo`
+// plus logical snapshot totals from the catalog.
+func (s *Server) handleGetStorage(w http.ResponseWriter, r *http.Request) {
+	info, err := s.Engine.GetRepoInfo(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("repo info: %v", err))
+		return
+	}
+	var snapshotCount int64
+	var logicalBytes int64
+	row := s.DB.QueryRowContext(r.Context(),
+		`SELECT COUNT(*), COALESCE(SUM(total_size),0) FROM snapshots`)
+	_ = row.Scan(&snapshotCount, &logicalBytes)
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"totalBytes":    info.TotalBytes,
+		"packBytes":     info.PackBytes,
+		"indexBytes":    info.IndexBytes,
+		"repoSnapshots": info.SnapshotCount,
+		"snapshotCount": snapshotCount,
+		"logicalBytes":  logicalBytes,
+	})
+}
+
+// handlePruneRepo runs `rustic prune` to remove unreferenced data and repack
+// pack files, reclaiming space freed by forgotten snapshots.
+func (s *Server) handlePruneRepo(w http.ResponseWriter, r *http.Request) {
+	if err := s.Engine.PruneRepo(r.Context()); err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("prune: %v", err))
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{"pruned": true})
 }
 
 // ── Restores ──────────────────────────────────────────────────────────────────
