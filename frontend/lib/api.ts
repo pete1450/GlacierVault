@@ -22,6 +22,8 @@ async function req<T>(method: string, path: string, body?: unknown): Promise<T> 
 // Auth
 export const login = (password: string) => req('POST', '/auth/login', { password })
 export const logout = () => req('POST', '/auth/logout')
+export const changePassword = (currentPassword: string, newPassword: string) =>
+  req('POST', '/auth/change-password', { currentPassword, newPassword })
 
 // Setup
 export const validateCredentials = (accessKey: string, secretKey: string, region: string) =>
@@ -46,6 +48,12 @@ export const listSnapshots = () => req<Snapshot[]>('GET', '/snapshots')
 export const getSnapshot = (id: number) => req<Snapshot>('GET', `/snapshots/${id}`)
 export const listSnapshotFiles = (id: number, prefix?: string) =>
   req<FileEntry[]>('GET', `/snapshots/${id}/files${prefix ? `?prefix=${encodeURIComponent(prefix)}` : ''}`)
+export const deleteSnapshot = (id: number, prune = false) =>
+  req<{ deleted: boolean; pruned: boolean }>('DELETE', `/snapshots/${id}${prune ? '?prune=true' : ''}`)
+
+// Storage
+export const getStorage = () => req<StorageInfo>('GET', '/storage')
+export const pruneRepo = () => req<{ pruned: boolean }>('POST', '/repo/prune')
 
 // Restores
 export const initiateRestore = (snapshotId: number, paths: string[], destination: string) =>
@@ -82,9 +90,14 @@ export interface Snapshot {
   id: number; snapshotId: string; backupDefId: number; hostname: string
   tags: string; totalSize: number; fileCount: number; backupTime: string
 }
+export interface StorageInfo {
+  totalBytes: number; packBytes: number; indexBytes: number
+  repoSnapshots: number; snapshotCount: number; logicalBytes: number
+}
 export interface FileEntry { path: string; size: number; mtime: string; isDir: boolean }
 export interface RestoreJob {
   id: number; snapshotId: number; requestedPaths: string; destination: string
   status: string; warmupStatus: string; retrievalStartedAt: string | null
-  restoreStartedAt: string | null; completedAt: string | null; errorMessage: string; createdAt: string
+  restoreStartedAt: string | null; completedAt: string | null; errorMessage: string
+  logOutput: string; createdAt: string
 }

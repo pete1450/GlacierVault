@@ -55,6 +55,7 @@ func (s *Server) Router() http.Handler {
 	r.Group(func(r chi.Router) {
 		r.Use(s.authMiddleware)
 		r.Post("/api/auth/logout", s.handleLogout)
+		r.Post("/api/auth/change-password", s.handleChangePassword)
 
 		// Setup wizard.
 		r.Post("/api/setup/validate", s.handleValidateCredentials)
@@ -78,6 +79,11 @@ func (s *Server) Router() http.Handler {
 		r.Get("/api/snapshots", s.handleListSnapshots)
 		r.Get("/api/snapshots/{id}", s.handleGetSnapshot)
 		r.Get("/api/snapshots/{id}/files", s.handleSnapshotFiles)
+		r.Delete("/api/snapshots/{id}", s.handleDeleteSnapshot)
+
+		// Storage.
+		r.Get("/api/storage", s.handleGetStorage)
+		r.Post("/api/repo/prune", s.handlePruneRepo)
 
 		// Restores.
 		r.Post("/api/restores", s.handleInitiateRestore)
@@ -143,6 +149,44 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 	http.SetCookie(w, &http.Cookie{Name: "session", Value: "", MaxAge: -1, Path: "/"})
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// handleChangePassword verifies the current password and sets a new one.
+func (s *Server) handleChangePassword(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		CurrentPassword string `json:"currentPassword"`
+		NewPassword     string `json:"newPassword"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request")
+		return
+	}
+	if len(body.NewPassword) < 8 {
+		writeError(w, http.StatusBadRequest, "new password must be at least 8 characters")
+		return
+	}
+
+	var hash string
+	row := s.DB.QueryRowContext(r.Context(), `SELECT password_hash FROM app_config WHERE id = 1`)
+	if err := row.Scan(&hash); err != nil {
+		writeError(w, http.StatusUnauthorized, "not configured")
+		return
+	}
+	if err := bcrypt.CompareHashAndPassword([]byte(hash), []byte(body.CurrentPassword)); err != nil {
+		writeError(w, http.StatusUnauthorized, "current password is incorrect")
+		return
+	}
+
+	newHash, err := bcrypt.GenerateFromPassword([]byte(body.NewPassword), bcrypt.DefaultCost)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "hash error")
+		return
+	}
+	if _, err := s.DB.ExecContext(r.Context(), `UPDATE app_config SET password_hash=? WHERE id=1`, string(newHash)); err != nil {
+		writeError(w, http.StatusInternalServerError, "update failed")
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
@@ -266,7 +310,6 @@ func (s *Server) handleDeploy(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		// Create IAM access key for the deployed user.
 		// Create IAM access key for the deployed user.
 		accessKey, secretKey, err := provisioning.CreateIAMAccessKey(ctx, body.AccessKey, body.SecretKey, body.Region, outputs.IAMUser)
 		if err != nil {
@@ -451,6 +494,7 @@ func (s *Server) handleGetBackup(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleUpdateBackup(w http.ResponseWriter, r *http.Request) {
 	id, _ := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
 	var body struct {
+		Name             *string  `json:"name"`
 		Schedule         *string  `json:"schedule"`
 		SourcePaths      []string `json:"sourcePaths"`
 		RetentionLabel   *string  `json:"retentionLabel"`
@@ -460,6 +504,10 @@ func (s *Server) handleUpdateBackup(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request")
 		return
+	}
+
+	if body.Name != nil && *body.Name != "" {
+		s.DB.ExecContext(r.Context(), `UPDATE backup_definitions SET name=?, updated_at=? WHERE id=?`, *body.Name, time.Now().UTC(), id)
 	}
 
 	if body.Schedule != nil {
@@ -525,7 +573,15 @@ func (s *Server) handleRunBackupNow(w http.ResponseWriter, r *http.Request) {
 		s.DB.ExecContext(ctx, `UPDATE backup_jobs SET status=?, completed_at=?, error_message=?, log_output=? WHERE id=?`,
 			status, time.Now().UTC(), errMsg, logText, jobID)
 		if err == nil {
-			s.Catalog.SyncAfterBackup(ctx, defID)
+			if syncErr := s.Catalog.SyncAfterBackup(ctx, defID); syncErr != nil {
+				// Surface catalog sync failures on the job record — a silent
+				// failure here is what made snapshots never appear in the UI.
+				msg := fmt.Sprintf("catalog sync failed: %v", syncErr)
+				buf.Write("[error] " + msg)
+				logText = strings.Join(buf.Lines(), "\n")
+				s.DB.ExecContext(ctx, `UPDATE backup_jobs SET error_message=?, log_output=? WHERE id=?`,
+					msg, logText, jobID)
+			}
 		}
 	}()
 
@@ -688,7 +744,10 @@ func (s *Server) handleSnapshotFiles(w http.ResponseWriter, r *http.Request) {
 	var rusticID string
 	s.DB.QueryRowContext(r.Context(), `SELECT snapshot_id FROM snapshots WHERE id=?`, snapshotRowID).Scan(&rusticID)
 	if rusticID != "" {
-		s.Catalog.IndexSnapshot(r.Context(), snapshotRowID, rusticID)
+		if err := s.Catalog.IndexSnapshot(r.Context(), snapshotRowID, rusticID); err != nil {
+			writeError(w, http.StatusInternalServerError, fmt.Sprintf("index snapshot: %v", err))
+			return
+		}
 	}
 
 	query := `SELECT path, size, mtime, is_dir FROM file_index WHERE snapshot_id=?`
@@ -719,6 +778,80 @@ func (s *Server) handleSnapshotFiles(w http.ResponseWriter, r *http.Request) {
 		files = []map[string]interface{}{}
 	}
 	writeJSON(w, http.StatusOK, files)
+}
+
+// handleDeleteSnapshot removes a snapshot from the repository via
+// `rustic forget` and drops its catalog rows. With ?prune=true, the forget
+// also runs prune to reclaim unreferenced space.
+func (s *Server) handleDeleteSnapshot(w http.ResponseWriter, r *http.Request) {
+	rowID, _ := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	var rusticID string
+	if err := s.DB.QueryRowContext(r.Context(),
+		`SELECT snapshot_id FROM snapshots WHERE id=?`, rowID).Scan(&rusticID); err != nil {
+		writeError(w, http.StatusNotFound, "snapshot not found")
+		return
+	}
+
+	prune := r.URL.Query().Get("prune") == "true"
+	if rusticID != "" {
+		if err := s.Engine.ForgetSnapshot(r.Context(), rusticID, prune); err != nil {
+			writeError(w, http.StatusInternalServerError, fmt.Sprintf("forget snapshot: %v", err))
+			return
+		}
+	}
+
+	tx, err := s.DB.BeginTx(r.Context(), nil)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(r.Context(), `DELETE FROM file_index WHERE snapshot_id=?`, rowID); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if _, err := tx.ExecContext(r.Context(), `DELETE FROM snapshots WHERE id=?`, rowID); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if err := tx.Commit(); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{"deleted": true, "pruned": prune})
+}
+
+// handleGetStorage reports repository storage usage from `rustic repoinfo`
+// plus logical snapshot totals from the catalog.
+func (s *Server) handleGetStorage(w http.ResponseWriter, r *http.Request) {
+	info, err := s.Engine.GetRepoInfo(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("repo info: %v", err))
+		return
+	}
+	var snapshotCount int64
+	var logicalBytes int64
+	row := s.DB.QueryRowContext(r.Context(),
+		`SELECT COUNT(*), COALESCE(SUM(total_size),0) FROM snapshots`)
+	_ = row.Scan(&snapshotCount, &logicalBytes)
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"totalBytes":    info.TotalBytes,
+		"packBytes":     info.PackBytes,
+		"indexBytes":    info.IndexBytes,
+		"repoSnapshots": info.SnapshotCount,
+		"snapshotCount": snapshotCount,
+		"logicalBytes":  logicalBytes,
+	})
+}
+
+// handlePruneRepo runs `rustic prune` to remove unreferenced data and repack
+// pack files, reclaiming space freed by forgotten snapshots.
+func (s *Server) handlePruneRepo(w http.ResponseWriter, r *http.Request) {
+	if err := s.Engine.PruneRepo(r.Context()); err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("prune: %v", err))
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{"pruned": true})
 }
 
 // ── Restores ──────────────────────────────────────────────────────────────────
@@ -786,6 +919,7 @@ func (s *Server) handleGetRestore(w http.ResponseWriter, r *http.Request) {
 		"destination": destination, "status": status, "warmupStatus": warmupStatus.String,
 		"retrievalStartedAt": nullTimeStr(retrievalStarted), "restoreStartedAt": nullTimeStr(restoreStarted),
 		"completedAt": nullTimeStr(completedAt), "errorMessage": errMsg.String,
+		"logOutput": strings.Join(engine.GetBuffer(id).Lines(), "\n"),
 		"createdAt": createdAt.Time,
 	})
 }

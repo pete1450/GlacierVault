@@ -3,6 +3,7 @@ package catalog
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -45,17 +46,9 @@ func (c *Catalog) upsertSnapshot(ctx context.Context, s engine.Snapshot, backupD
 
 	tagsJSON := "[]"
 	if len(s.Tags) > 0 {
-		b := []byte{'['}
-		for i, t := range s.Tags {
-			if i > 0 {
-				b = append(b, ',')
-			}
-			b = append(b, '"')
-			b = append(b, []byte(t)...)
-			b = append(b, '"')
+		if b, err := json.Marshal(s.Tags); err == nil {
+			tagsJSON = string(b)
 		}
-		b = append(b, ']')
-		tagsJSON = string(b)
 	}
 
 	_, err := c.db.ExecContext(ctx, `

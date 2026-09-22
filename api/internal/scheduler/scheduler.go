@@ -158,6 +158,20 @@ func (s *Scheduler) runBackup(def BackupDef) {
 		log.Printf("scheduler: backup %q failed: %v", def.Name, runErr)
 	}
 
+	if runErr == nil {
+		if err := s.catalog.SyncAfterBackup(ctx, def.ID); err != nil {
+			log.Printf("scheduler: catalog sync: %v", err)
+			// Surface it in the job log so it is visible from the UI, not
+			// just the container logs. A silent failure here is what made
+			// snapshots never appear in the UI.
+			buf.Write(fmt.Sprintf("[error] catalog sync failed: %v", err))
+			if errMsg != "" {
+				errMsg += "; "
+			}
+			errMsg += fmt.Sprintf("catalog sync failed: %v", err)
+		}
+	}
+
 	logLines := ""
 	for _, l := range buf.Lines() {
 		logLines += l + "\n"
@@ -168,12 +182,6 @@ func (s *Scheduler) runBackup(def BackupDef) {
 		WHERE id=?`,
 		status, time.Now().UTC(), errMsg, logLines, jobID,
 	)
-
-	if runErr == nil {
-		if err := s.catalog.SyncAfterBackup(ctx, def.ID); err != nil {
-			log.Printf("scheduler: catalog sync: %v", err)
-		}
-	}
 }
 
 func (s *Scheduler) loadDefs(ctx context.Context) ([]BackupDef, error) {
