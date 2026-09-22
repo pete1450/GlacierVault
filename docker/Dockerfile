@@ -41,16 +41,20 @@ RUN curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o /tm
     && rm -rf /tmp/awscli.zip /tmp/aws
 
 # Rustic backup tool.
-ARG RUSTIC_VERSION=0.9.4
+ARG RUSTIC_VERSION=0.11.4
 RUN curl -fsSL "https://github.com/rustic-rs/rustic/releases/download/v${RUSTIC_VERSION}/rustic-v${RUSTIC_VERSION}-x86_64-unknown-linux-gnu.tar.gz" \
     | tar -xz -C /usr/local/bin rustic \
-    && chmod +x /usr/local/bin/rustic
+    && chmod +x /usr/local/bin/rustic \
+    && rustic --version
 
-# warmup-s3-archives (from rustic-aws).
-ARG WARMUP_VERSION=0.3.0
-RUN curl -fsSL "https://github.com/rustic-rs/rustic-aws/releases/download/warmup-s3-archives-v${WARMUP_VERSION}/warmup-s3-archives-v${WARMUP_VERSION}-x86_64-unknown-linux-gnu.tar.gz" \
-    | tar -xz -C /usr/local/bin warmup-s3-archives \
-    && chmod +x /usr/local/bin/warmup-s3-archives || true
+# warmup-s3-archives: Glacier restore orchestrator used as rustic's
+# --warm-up-command. Released as a standalone binary (not a tarball) from
+# the upstream GitLab project philipmw/warmup-s3-archives.
+ARG WARMUP_VERSION=1.3.0
+RUN curl -fsSL -o /usr/local/bin/warmup-s3-archives \
+        "https://gitlab.com/philipmw/warmup-s3-archives/-/releases/v${WARMUP_VERSION}/downloads/warmup-s3-archives-v${WARMUP_VERSION}-linux-x86_64" \
+    && chmod +x /usr/local/bin/warmup-s3-archives \
+    && test -x /usr/local/bin/warmup-s3-archives
 
 # AWS CDK (for infrastructure deployment).
 RUN npm install -g aws-cdk@latest --quiet
