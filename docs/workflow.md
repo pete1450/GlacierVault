@@ -82,16 +82,17 @@ job. Plan restores; batch small ones together.
 - When retrieval completes, rustic downloads the packs and writes your files.
   This part is fast.
 
-**Partial vs. full restore costs** (us-east-1, Bulk):
+**Partial vs. full restore costs** (us-east-1, Bulk, CloudFront free-egress path enabled):
 
 | Restore | Approx. cost | Why |
 |---|---|---|
-| One 25 MB photo from a 500 GB archive | **~$0.25** | Warms its 512 MiB pack ($0.001 in bytes) + one $0.25 batch job; egress under the free tier |
-| Full 500 GB archive | **~$37.53** | $1.53 retrieval + **$36 egress** (400 GB over the 100 GB free tier) |
-| Full 2 TB VM backup | **~$180.79** | $5.47 retrieval + **$175.32 egress** |
+| One 25 MB photo from a 500 GB archive | **~$0.25** | Warms its 512 MiB pack ($0.001 in bytes) + one $0.25 batch job; egress inside the free allowance |
+| Full 500 GB archive | **~$1.53** | Retrieval + batch job only — 500 GB fits the 1 TB CloudFront allowance |
+| Full 2 TB VM backup | **~$92.51** | $5.47 retrieval + ~$87 egress overage (second TB of the month) |
 
-Egress dominates large restores. Full breakdowns and more scenarios are in
-the [Cost Guide](costs.md).
+Pack downloads go through the private CloudFront distribution by default
+(1 TB/month free). Full breakdowns and more scenarios are in the
+[Cost Guide](costs.md).
 
 > Partial restores thaw **whole 512 MiB packs** — restoring a 1 KB file still
 > retrieves its entire pack. That's the price of cheap storage; the byte
@@ -116,12 +117,18 @@ Recovery → Download recovery package**: bucket names, region, repo password,
 and manual restore instructions. The outline:
 
 1. Install `rustic` and `warmup-s3-archives` locally.
-2. Recreate `/config/rustic.toml` from the package template with your
-   (limited or admin) AWS credentials.
-3. List snapshots: `rustic snapshots` (hot bucket — instant).
-4. Warm the packs: `warmup-s3-archives` with a config pointing at your
-   buckets/role/queue, tier `BULK`.
-5. `rustic restore <snapshot-id> /destination`.
+2. Unzip the package and `cd` into it. It contains `rustic.toml` (repo
+   config with credentials), `repo.password`, and
+   `warmup-s3-archives-config.toml` (batch role, buckets, queue URL, BULK
+   tier) — the tool reads its config from the working directory.
+3. Export your AWS credentials (`AWS_ACCESS_KEY_ID`,
+   `AWS_SECRET_ACCESS_KEY`, `AWS_REGION`).
+4. List snapshots: `rustic -P ./rustic snapshots` (hot bucket — instant).
+5. Restore (destination is positional; `%paths` is replaced by rustic with
+   the exact S3 keys the snapshot needs):
+   `rustic -P ./rustic restore <snapshot-id> /destination --warm-up-command "warmup-s3-archives %paths" --warm-up-batch 1000`.
+   The tool submits an S3 Batch restore at the cheapest BULK tier and waits
+   for Glacier, then rustic downloads automatically.
 
 **Test this before you need it.** A backup you haven't restored is a hope,
 not a backup. After your first real backup completes, do a small partial

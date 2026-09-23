@@ -58,6 +58,26 @@ Bulk ($0.0025/GB, up to 48 h) vs. Standard ($0.02/GB, ~12 h): 8× cheaper for
 waiting longer. Data that has sat untouched in a vault for months can wait
 another day. Every restore uses Bulk unless you go out of your way.
 
+### Why CloudFront for restore downloads
+
+CloudFront gives every account **1 TB/month of free data transfer out** —
+and S3-to-CloudFront transfer is free. A restore that downloads packs
+through a private CloudFront distribution instead of directly from S3
+therefore pays **$0 egress** for the first terabyte each month, versus ~$0.09/GB
+from S3. The distribution requires signed URLs for every request, so the
+bucket stays private; the appliance mints those URLs inside a
+localhost-only proxy, per object, with a 2-minute expiry. Rustic never sees
+a signed URL — it just talks S3-shaped HTTP to the proxy.
+
+The free allowance is account-wide and resets monthly; it is shared with any
+other CloudFront traffic in the account. Past 1 TB, CloudFront overage is
+~$0.085/GB in the US/Europe (the `PriceClass_100` distribution only uses
+US/EU edge locations, the cheapest). Pack objects are content-addressed and
+immutable, so the distribution caches them aggressively (30-day default TTL):
+a repeat restore of the same packs is served from the edge instead of
+re-fetched from S3. Backups never touch CloudFront (it can't receive
+uploads) — this is a download-only path.
+
 ### Why S3 Batch Operations for restores
 
 Thawing N packs with individual `RestoreObject` calls means N request
@@ -96,14 +116,16 @@ silent sync failure once caused snapshots to never appear in the UI.
 | Next.js UI (`frontend/`) | Static frontend served by the Go server |
 | Rustic 0.11.4 | Backup, snapshot, and restore engine; cold-storage repository format |
 | warmup-s3-archives 1.3.0 | Submits S3 Batch restore jobs and waits for Glacier (invoked by rustic's `--warm-up-command`) |
-| CDK stack (`cdk/`) | Provisions all AWS resources |
+| Localhost S3→CloudFront proxy (`api/internal/cloudfront`) | Translates rustic's S3 GET/HEAD into per-object signed CloudFront URLs; loopback-only |
+| CDK stack (`cdk/`) | Provisions the core AWS resources (S3, SQS, IAM) |
+| CloudFront provisioner (`api/internal/cloudfront`) | Creates the distribution, OAC, key group, and cache policy via the AWS SDK after the CDK deploy |
 | SQLite (`/database/glaciervault.db`) | Backup definitions, jobs, restores, snapshot catalog, encrypted credentials |
 
 The Docker image pins rustic 0.11.4 and warmup-s3-archives 1.3.0 (downloaded
 as a standalone binary from the upstream GitLab project). The Dockerfile
 fails the build if the warmup binary can't be installed — no silent skips.
 
-### AWS resources (created by the CDK stack)
+### AWS resources (created by the CDK stack, plus CloudFront)
 
 | Resource | Purpose |
 |---|---|
@@ -114,6 +136,14 @@ fails the build if the warmup binary can't be installed — no silent skips.
 | Cold-events SQS queue | `OBJECT_RESTORE_COMPLETED` notifications the warmup tool waits on |
 | `rustic-iam-user` | Limited IAM user for daily backup/restore operations |
 | S3 batch IAM role | Role S3 Batch Operations assumes to read manifests and restore objects |
+| CloudFront distribution | Free-egress download path for restores (created by the app via the AWS SDK, not CDK) |
+| CloudFront origin access control | Lets the distribution read the cold bucket while it stays private |
+| CloudFront key group + signing key | Signed-URL auth; the private key is generated locally and stored encrypted in the DB |
+
+The CDK app itself is not vendored in this repo — the Docker build fetches
+`glacier-cold-storage-cdk` from upstream `rustic-rs/rustic-aws` at image
+build time. CloudFront is provisioned separately (Go, AWS SDK) right after
+the CDK deploy, while the setup credentials are still available.
 
 ### Backup flow
 
@@ -160,7 +190,14 @@ UI: pick snapshot → browse → select files (or nothing = full) → destinatio
        - creates the S3 Batch Operations restore job (BULK tier)
        - blocks until every pack reports OBJECT_RESTORE_COMPLETED via SQS
          (up to the 72 h overall timeout)
-  4. rustic downloads the thawed packs and writes files to the destination
+  4. rustic downloads the thawed packs and writes files to the destination.
+     When the CloudFront free-egress path is enabled, the restore runs with
+     a per-job rustic profile whose cold backend points at the localhost
+     proxy (`endpoint = "http://127.0.0.1:18923"`); pack downloads then flow
+     through signed CloudFront URLs instead of paid S3 egress. Only the
+     download phase uses the proxy — warmup, snapshots, and backups keep
+     using direct S3. If the proxy is unreachable the restore fails open to
+     direct S3 (it costs more, but it completes).
   5. job marked completed; log retained on the restore record
 ```
 

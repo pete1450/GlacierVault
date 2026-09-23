@@ -4,11 +4,13 @@ import { useRouter } from 'next/navigation'
 import Nav from '@/components/Nav'
 import {
   changePassword, logout, rebuildCatalog, getSetupStatus, type SetupStatus,
+  getCloudFrontStatus, enableCloudFront, disableCloudFront, type CloudFrontStatus,
 } from '@/lib/api'
 
 export default function SettingsPage() {
   const router = useRouter()
   const [status, setStatus] = useState<SetupStatus | null>(null)
+  const [cf, setCf] = useState<CloudFrontStatus | null>(null)
 
   // Change password
   const [currentPw, setCurrentPw] = useState('')
@@ -20,9 +22,55 @@ export default function SettingsPage() {
   // Catalog rebuild
   const [rebuildMsg, setRebuildMsg] = useState('')
 
+  // CloudFront free-egress path
+  const [cfAccessKey, setCfAccessKey] = useState('')
+  const [cfSecretKey, setCfSecretKey] = useState('')
+  const [cfMsg, setCfMsg] = useState('')
+  const [cfBusy, setCfBusy] = useState(false)
+
   useEffect(() => {
     getSetupStatus().then(setStatus).catch(() => {})
+    getCloudFrontStatus().then(setCf).catch(() => {})
   }, [])
+
+  async function refreshCf() {
+    try { setCf(await getCloudFrontStatus()) } catch {}
+  }
+
+  async function handleCfEnable(e: React.FormEvent) {
+    e.preventDefault()
+    setCfMsg('')
+    setCfBusy(true)
+    try {
+      await enableCloudFront(cfAccessKey, cfSecretKey)
+      setCfAccessKey(''); setCfSecretKey('')
+      setCfMsg('Provisioning started — this takes a few minutes. This page will update when it is ready.')
+      // Poll until provisioning finishes.
+      for (let i = 0; i < 40; i++) {
+        await new Promise(r => setTimeout(r, 15000))
+        const s = await getCloudFrontStatus().catch(() => null)
+        if (!s) continue
+        setCf(s)
+        if (!s.provisioning) break
+      }
+      await refreshCf()
+    } catch (err: any) {
+      setCfMsg(`Error: ${err.message}`)
+    } finally {
+      setCfBusy(false)
+    }
+  }
+
+  async function handleCfDisable() {
+    setCfMsg('')
+    try {
+      await disableCloudFront()
+      setCfMsg('Free-egress path disabled. Restores will use paid S3 egress.')
+      await refreshCf()
+    } catch (err: any) {
+      setCfMsg(`Error: ${err.message}`)
+    }
+  }
 
   async function handleChangePassword(e: React.FormEvent) {
     e.preventDefault()
@@ -77,6 +125,83 @@ export default function SettingsPage() {
           ) : (
             <p className="text-gray-500 text-sm">Loading…</p>
           )}
+        </section>
+
+        {/* CloudFront free-egress restores */}
+        <section className="bg-gray-900 rounded-xl p-6 space-y-4">
+          <h2 className="font-semibold text-lg">Free-egress restores (CloudFront)</h2>
+          <p className="text-sm text-gray-400">
+            Restore downloads can go through a private CloudFront distribution instead of
+            directly from S3, so they consume CloudFront's monthly free data-transfer
+            allowance (1 TB/month, shared across your account) instead of paid S3 egress.
+            The bucket stays private: the distribution requires signed URLs, which are
+            minted inside the appliance by a localhost-only proxy and never leave it.
+          </p>
+          {cf ? (
+            <div className="text-sm space-y-2">
+              <div className="flex items-center gap-2">
+                <span className={`inline-block w-2.5 h-2.5 rounded-full ${cf.enabled ? 'bg-green-500' : 'bg-gray-600'}`} />
+                <span>{cf.provisioning ? 'Provisioning…' : cf.enabled ? 'Enabled' : 'Not enabled'}</span>
+                {cf.enabled && !cf.proxyReady && !cf.provisioning && (
+                  <span className="text-amber-400 text-xs">(proxy not running — restores will use direct S3)</span>
+                )}
+              </div>
+              {cf.enabled && cf.domain && (
+                <div><span className="text-gray-500 text-xs">Distribution</span><div className="font-mono break-all">{cf.domain}</div></div>
+              )}
+              {cf.lastError && (
+                <p className="text-red-400 text-xs break-all">{cf.lastError}</p>
+              )}
+            </div>
+          ) : (
+            <p className="text-gray-500 text-sm">Loading…</p>
+          )}
+          {!cf?.enabled && !cf?.provisioning && (
+            <form onSubmit={handleCfEnable} className="space-y-3 max-w-sm">
+              <p className="text-sm text-gray-400">
+                Enable with a temporary AWS admin access key (the same kind used during
+                setup). It is used for this provisioning request only and is never stored.
+              </p>
+              <div>
+                <label className="block text-sm text-gray-300 mb-1">AWS access key ID</label>
+                <input
+                  type="text"
+                  value={cfAccessKey}
+                  onChange={e => setCfAccessKey(e.target.value)}
+                  className="w-full px-3 py-2 bg-gray-800 text-white rounded-lg border border-gray-700 focus:outline-none focus:border-blue-500 text-sm font-mono"
+                  required
+                  autoComplete="off"
+                />
+              </div>
+              <div>
+                <label className="block text-sm text-gray-300 mb-1">AWS secret access key</label>
+                <input
+                  type="password"
+                  value={cfSecretKey}
+                  onChange={e => setCfSecretKey(e.target.value)}
+                  className="w-full px-3 py-2 bg-gray-800 text-white rounded-lg border border-gray-700 focus:outline-none focus:border-blue-500 text-sm font-mono"
+                  required
+                  autoComplete="off"
+                />
+              </div>
+              <button
+                type="submit"
+                disabled={cfBusy}
+                className="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-700 rounded-lg text-sm font-medium transition-colors"
+              >
+                {cfBusy ? 'Provisioning…' : 'Enable free-egress restores'}
+              </button>
+            </form>
+          )}
+          {cf?.enabled && !cf?.provisioning && (
+            <button
+              onClick={handleCfDisable}
+              className="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg text-sm transition-colors"
+            >
+              Disable free-egress path
+            </button>
+          )}
+          {cfMsg && <p className="text-sm text-gray-300">{cfMsg}</p>}
         </section>
 
         {/* Recovery */}

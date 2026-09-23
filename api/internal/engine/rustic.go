@@ -135,7 +135,15 @@ func (e *Engine) runStreaming(ctx context.Context, buf *RingBuffer, args ...stri
 // runStreamingWith is runStreaming with extra environment and an optional
 // working directory for the child process.
 func (e *Engine) runStreamingWith(ctx context.Context, buf *RingBuffer, env []string, dir string, args ...string) ([]byte, error) {
-	cmdArgs := append(e.baseArgs(), args...)
+	return e.runStreamingWithProfile(ctx, buf, env, dir, e.configPath, args...)
+}
+
+// runStreamingWithProfile is runStreamingWith using an explicit rustic
+// profile (config file). It exists so restores can use a per-job config that
+// points the cold backend at the localhost CloudFront proxy while every
+// other operation keeps using the standard config.
+func (e *Engine) runStreamingWithProfile(ctx context.Context, buf *RingBuffer, env []string, dir, configPath string, args ...string) ([]byte, error) {
+	cmdArgs := append([]string{"-P", strings.TrimSuffix(configPath, ".toml")}, args...)
 	cmd := exec.CommandContext(ctx, rusticBin, cmdArgs...)
 	if len(env) > 0 {
 		cmd.Env = env
@@ -212,6 +220,7 @@ func (e *Engine) RunBackup(ctx context.Context, buf *RingBuffer, sourcePaths []s
 // `snapshots --json` grouping format has changed across rustic versions:
 //   - rustic 0.11+: [{"group_key": {...}, "snapshots": [...]}, ...]
 //   - rustic 0.9.x:  [[group, [snapshots...]], ...]
+//
 // A plain flat array is accepted as a final fallback. All shapes are
 // flattened into one list.
 func (e *Engine) ListSnapshots(ctx context.Context) ([]Snapshot, error) {
@@ -346,6 +355,10 @@ type RestoreOptions struct {
 	// Dir is the working directory for the rustic process.
 	// warmup-s3-archives reads warmup-s3-archives-config.toml from it.
 	Dir string
+	// ConfigPath optionally overrides the rustic profile (config file) for
+	// this restore only. Used to point the cold backend at the localhost
+	// CloudFront proxy; empty means the engine's default config.
+	ConfigPath string
 }
 
 // RunRestore executes rustic restore for a snapshot to destination.
@@ -366,8 +379,17 @@ func (e *Engine) RunRestore(ctx context.Context, buf *RingBuffer, snapshotID, de
 			"--warm-up-batch", "1000",
 		)
 	}
-	_, err := e.runStreamingWith(ctx, buf, opts.Env, opts.Dir, args...)
+	_, err := e.runStreamingWithProfile(ctx, buf, opts.Env, opts.Dir, e.profileForRestore(opts), args...)
 	return err
+}
+
+// profileForRestore selects the rustic config for a restore: the per-restore
+// override when set, otherwise the engine default.
+func (e *Engine) profileForRestore(opts RestoreOptions) string {
+	if opts.ConfigPath != "" {
+		return opts.ConfigPath
+	}
+	return e.configPath
 }
 
 // RepoInfo summarizes repository storage usage.

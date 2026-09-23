@@ -18,23 +18,28 @@ import (
 
 const cdkDir = "/opt/cdk"
 
-// ResourceEstimate describes the AWS resources CDK will create.
+// ResourceEstimate describes the AWS resources the deploy will create.
+// CDK provisions the S3/SQS/IAM resources; the app then provisions the
+// CloudFront distribution via the AWS SDK while the setup credentials are
+// still available.
 type ResourceEstimate struct {
-	S3Buckets int    `json:"s3Buckets"`
-	SQSQueues int    `json:"sqsQueues"`
-	IAMUsers  int    `json:"iamUsers"`
-	IAMRoles  int    `json:"iamRoles"`
-	Details   string `json:"details"`
+	S3Buckets      int    `json:"s3Buckets"`
+	SQSQueues      int    `json:"sqsQueues"`
+	IAMUsers       int    `json:"iamUsers"`
+	IAMRoles       int    `json:"iamRoles"`
+	CloudFrontDist int    `json:"cloudfrontDists"`
+	Details        string `json:"details"`
 }
 
-// Estimate returns the static resource description for the CDK stack.
+// Estimate returns the static resource description for the deploy.
 func Estimate() ResourceEstimate {
 	return ResourceEstimate{
-		S3Buckets: 4,
-		SQSQueues: 1,
-		IAMUsers:  1,
-		IAMRoles:  1,
-		Details:   "hot-bucket, cold-bucket (Glacier Deep Archive), batch-manifests-bucket, batch-reports-bucket, cold-events-queue, rustic-iam-user, s3-batch-role",
+		S3Buckets:      4,
+		SQSQueues:      1,
+		IAMUsers:       1,
+		IAMRoles:       1,
+		CloudFrontDist: 1,
+		Details:        "hot-bucket, cold-bucket (Glacier Deep Archive), batch-manifests-bucket, batch-reports-bucket, cold-events-queue, rustic-iam-user, s3-batch-role, cloudfront-distribution (free-egress restores)",
 	}
 }
 

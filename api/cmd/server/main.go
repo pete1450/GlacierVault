@@ -11,8 +11,9 @@ import (
 
 	"golang.org/x/crypto/bcrypt"
 
-	appCrypto "github.com/glaciervault/api/internal/crypto"
 	"github.com/glaciervault/api/internal/catalog"
+	"github.com/glaciervault/api/internal/cloudfront"
+	appCrypto "github.com/glaciervault/api/internal/crypto"
 	"github.com/glaciervault/api/internal/db"
 	"github.com/glaciervault/api/internal/engine"
 	"github.com/glaciervault/api/internal/restore"
@@ -52,7 +53,14 @@ func main() {
 	// Load SQS URL from DB (may be empty before setup).
 	eng := engine.New(rusticConfigPath)
 	cat := catalog.New(database, eng)
-	restoreMgr := restore.New(database, eng)
+
+	// Localhost S3→CloudFront proxy for free-egress restores. Starts only
+	// when the CloudFront path has been provisioned and enabled.
+	cfMgr := cloudfront.NewManager(database)
+	if err := cfMgr.Reload(); err != nil {
+		log.Printf("cloudfront proxy: %v", err)
+	}
+	restoreMgr := restore.New(database, eng, cfMgr)
 
 	sched := scheduler.New(database, eng, cat)
 	if err := sched.Start(context.Background()); err != nil {
@@ -68,6 +76,7 @@ func main() {
 		Catalog:    cat,
 		Scheduler:  sched,
 		RestoreMgr: restoreMgr,
+		CFManager:  cfMgr,
 		JWTSecret:  jwtSecret,
 		ConfigPath: configDir,
 	}

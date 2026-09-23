@@ -38,6 +38,7 @@ In the AWS Console:
            "iam:*",
            "s3:*",
            "sqs:*",
+           "cloudfront:*",
            "sts:GetCallerIdentity",
            "ecr:*"
          ],
@@ -48,7 +49,8 @@ In the AWS Console:
 
      > In practice CDK touches IAM, S3, SQS, and CloudFormation. The `ecr:*`
      > entry covers CDK asset publishing if your bootstrap uses it; omit it
-     > if your bootstrap is already in place.
+     > if your bootstrap is already in place. `cloudfront:*` is needed for
+     > the free-egress distribution the app provisions after the CDK deploy.
 3. Finish user creation, then open the user → **Security credentials →
    Create access key** → use case "Command Line Interface (CLI)". Copy the
    **Access key ID** and **Secret access key** — the secret is shown once.
@@ -105,8 +107,9 @@ The wizard has four steps:
    (default `us-east-1` — cheapest for most of these services), and a stack
    name (default `rustic-cold-backups`; change it if you run multiple stacks).
 2. **Validate.** The app calls STS to confirm the identity and shows a
-   resource estimate: 4 S3 buckets, 1 SQS queue, 1 IAM user, 1 IAM role.
-   If this fails, double-check the key pair and region.
+   resource estimate: 4 S3 buckets, 1 SQS queue, 1 IAM user, 1 IAM role,
+   1 CloudFront distribution (free-egress restores). If this fails,
+   double-check the key pair and region.
 3. **Deploy.** CDK bootstrap (first time only) + `cdk deploy`, with live
    logs streamed to the page. Takes **5–10 minutes**. Don't close the page,
    but if you do, the job record keeps the logs.
@@ -114,6 +117,14 @@ The wizard has four steps:
    `rustic-iam-user` (stored encrypted in the database), writes
    `/config/rustic.toml`, generates the 32-byte repo password, and runs
    `rustic init` with **512 MiB data / 32 MiB tree packs**.
+5. **Free-egress provisioning.** Right after the CDK deploy, the app
+   provisions a private CloudFront distribution in front of the cold bucket
+   (origin access control, signed-URL key group, cache policy) using the
+   setup credentials while they are still available. No domain, DNS, or
+   certificate setup is needed — it uses the generated
+   `*.cloudfront.net` hostname, which is protected by signed URLs. If this
+   step fails, setup still completes; you can enable it later from
+   Settings (see below).
 
 ### What the deploy creates
 
@@ -126,10 +137,24 @@ The wizard has four steps:
 | SQS queue | `<stack>-coldevents…` | Glacier restore notifications |
 | IAM user | `rustic-iam-user` | Limited credentials for daily ops |
 | IAM role | `<stack>-s3batchrole…` | Assumed by S3 Batch Operations |
+| CloudFront distribution | `d…cloudfront.net` | Free-egress restore downloads (signed URLs only) |
 
 Bucket names get a random suffix (global uniqueness). The account ID, bucket
 names, queue URL, and resolved role ARN are persisted in the database so
 restores can build their warmup configs later.
+
+### Enabling free-egress restores on an existing install
+
+If your appliance was set up before the CloudFront path existed (or the
+provisioning step failed), go to **Settings → Free-egress restores
+(CloudFront)** and enter a temporary AWS admin access key — the same kind of
+credentials used during setup. The app provisions the distribution and then
+**discards the credentials**; they are never stored. The signing private key
+is generated locally and kept encrypted in the database.
+
+The free allowance is 1 TB/month of CloudFront data transfer per account
+(shared with any other CloudFront use); past that, overage is ~$0.085/GB in
+US/Europe. See [Costs](costs.md) for worked examples.
 
 ## 4. After setup
 

@@ -88,6 +88,13 @@ on the Bulk tier — that's Glacier working, not the app stuck. Budget up to
 
 - **Infrastructure:** region, deploy timestamp, hot and cold bucket names
   (from the setup record).
+- **Free-egress restores (CloudFront):** status of the private CloudFront
+  distribution used for restore downloads. Shows enabled/disabled, the
+  distribution hostname, and whether the local signing proxy is running.
+  **Enable** with a temporary AWS admin access key (used for the
+  provisioning request only, never stored) — needed for installs that
+  predate the feature or where provisioning failed during setup. **Disable**
+  to fall back to paid S3 egress.
 - **Recovery:** **Download recovery package** (bucket names, region, repo
   password, manual restore instructions — store it somewhere safe) and
   **Rebuild snapshot catalog** (re-indexes snapshots from the hot repo; use
@@ -100,8 +107,10 @@ The first-run wizard (also reachable later to re-run/refresh the deployment).
 
 1. **Credentials** — AWS access key, secret key, region, stack name.
 2. **Validate** — confirms the identity via STS and shows the resource
-   estimate (4 S3 buckets, 1 SQS queue, 1 IAM user, 1 IAM role).
-3. **Deploy** — live CDK bootstrap + deploy logs (5–10 min).
+   estimate (4 S3 buckets, 1 SQS queue, 1 IAM user, 1 IAM role,
+   1 CloudFront distribution).
+3. **Deploy** — live CDK bootstrap + deploy logs (5–10 min), then automatic
+   CloudFront provisioning for free-egress restores.
 4. **Done** — confirmation; button to the dashboard.
 
 Re-running setup on an existing deployment backfills any missing fields

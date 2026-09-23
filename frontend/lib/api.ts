@@ -64,6 +64,21 @@ export const getRestore = (id: number) => req<RestoreJob>('GET', `/restores/${id
 // Catalog
 export const rebuildCatalog = () => req('POST', '/catalog/rebuild')
 
+// CloudFront free-egress restore path
+export interface CloudFrontStatus {
+  enabled: boolean
+  domain: string
+  distributionId: string
+  provisionedAt: string
+  proxyReady: boolean
+  provisioning: boolean
+  lastError: string
+}
+export const getCloudFrontStatus = () => req<CloudFrontStatus>('GET', '/settings/cloudfront')
+export const enableCloudFront = (accessKey: string, secretKey: string) =>
+  req<{ status: string }>('POST', '/settings/cloudfront/enable', { accessKey, secretKey })
+export const disableCloudFront = () => req<{ status: string }>('POST', '/settings/cloudfront/disable')
+
 // Types
 export interface SetupStatus {
   setupComplete: boolean
@@ -72,7 +87,7 @@ export interface SetupStatus {
   coldBucket: string
   sqsUrl: string
   deployedAt: string | null
-  estimate: { s3Buckets: number; sqsQueues: number; iamUsers: number; iamRoles: number; details: string }
+  estimate: { s3Buckets: number; sqsQueues: number; iamUsers: number; iamRoles: number; cloudfrontDists: number; details: string }
 }
 export interface BackupDef {
   id: number; name: string; sourcePaths: string; schedule: string

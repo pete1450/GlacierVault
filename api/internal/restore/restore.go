@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/glaciervault/api/internal/cloudfront"
 	appCrypto "github.com/glaciervault/api/internal/crypto"
 	"github.com/glaciervault/api/internal/engine"
 )
@@ -44,10 +45,11 @@ const (
 type Manager struct {
 	db     *sql.DB
 	engine *engine.Engine
+	cf     *cloudfront.Manager // localhost S3→CloudFront proxy lifecycle
 }
 
-func New(db *sql.DB, eng *engine.Engine) *Manager {
-	return &Manager{db: db, engine: eng}
+func New(db *sql.DB, eng *engine.Engine, cf *cloudfront.Manager) *Manager {
+	return &Manager{db: db, engine: eng, cf: cf}
 }
 
 // Initiate creates a restore job record and starts the workflow asynchronously.
@@ -114,9 +116,10 @@ func (m *Manager) run(ctx context.Context, jobID, snapshotRowID int64, paths []s
 		"(Bulk tier, cheapest; Glacier can take up to 48h)...")
 
 	if err := m.engine.RunRestore(ctx, buf, rusticID, destination, paths, engine.RestoreOptions{
-		Warmup: true,
-		Env:    env,
-		Dir:    workDir,
+		Warmup:     true,
+		Env:        env,
+		Dir:        workDir,
+		ConfigPath: m.cfRestoreProfile(ctx, buf, workDir),
 	}); err != nil {
 		return fmt.Errorf("rustic restore: %w", err)
 	}
@@ -171,12 +174,63 @@ glacier_job_tier = %q
 	return dir, nil
 }
 
-// awsSettings holds the decrypted deployment credentials plus the cold bucket.
+// awsSettings holds the decrypted deployment credentials plus the buckets.
 type awsSettings struct {
 	region     string
 	accessKey  string
 	secretKey  string
+	hotBucket  string
 	coldBucket string
+}
+
+// cfRestoreProfile writes a per-restore rustic profile that points the cold
+// backend at the localhost CloudFront proxy, so pack downloads use
+// CloudFront's free data-transfer allowance instead of paid S3 egress. It
+// returns "" (use the default profile, direct S3) when the free-egress path
+// is not enabled or the proxy is unreachable — restores fail open to direct
+// S3 rather than failing because the proxy is down.
+func (m *Manager) cfRestoreProfile(ctx context.Context, buf *engine.RingBuffer, workDir string) string {
+	cfg, err := cloudfront.Load(m.db)
+	if err != nil || !cfg.Enabled {
+		return ""
+	}
+	proxyAddr := m.cf.Addr()
+	if !cloudfront.Reachable(proxyAddr) {
+		buf.Write("[restore] CloudFront proxy unreachable — downloading directly from S3 (paid egress).")
+		log.Printf("restore: cloudfront proxy %s unreachable, using direct S3", proxyAddr)
+		return ""
+	}
+	s, err := m.loadAWSSettings(ctx)
+	if err != nil {
+		buf.Write("[restore] Could not load AWS settings for CloudFront profile — downloading directly from S3.")
+		log.Printf("restore: load aws settings for cf profile: %v", err)
+		return ""
+	}
+	profile := fmt.Sprintf(`[repository]
+repository = "opendal:s3"
+repo-hot = "opendal:s3"
+password-file = "/config/repo.password"
+
+[repository.options]
+access_key_id = %q
+secret_access_key = %q
+region = %q
+
+[repository.options-hot]
+bucket = %q
+
+[repository.options-cold]
+bucket = %q
+default_storage_class = "DEEP_ARCHIVE"
+endpoint = "http://%s"
+`, s.accessKey, s.secretKey, s.region, s.hotBucket, s.coldBucket, proxyAddr)
+	path := filepath.Join(workDir, "rustic-cf.toml")
+	if err := os.WriteFile(path, []byte(profile), 0600); err != nil {
+		log.Printf("restore: write cf profile: %v", err)
+		return ""
+	}
+	buf.Write("[restore] Downloads will use the CloudFront free-egress path.")
+	return path
 }
 
 // warmupSettings holds everything warmup-s3-archives needs in its config file.
@@ -194,8 +248,8 @@ func (m *Manager) loadAWSSettings(ctx context.Context) (*awsSettings, error) {
 	var s awsSettings
 	var encKey, encSecret string
 	err := m.db.QueryRowContext(ctx,
-		`SELECT region, encrypted_access_key, encrypted_secret_key, cold_bucket FROM aws_config WHERE id=1`,
-	).Scan(&s.region, &encKey, &encSecret, &s.coldBucket)
+		`SELECT region, encrypted_access_key, encrypted_secret_key, hot_bucket, cold_bucket FROM aws_config WHERE id=1`,
+	).Scan(&s.region, &encKey, &encSecret, &s.hotBucket, &s.coldBucket)
 	if err != nil {
 		return nil, fmt.Errorf("load aws config: %w", err)
 	}
@@ -235,8 +289,8 @@ func (m *Manager) loadWarmupSettings(ctx context.Context) (*warmupSettings, erro
 	for name, v := range map[string]string{
 		"account_id": s.accountID, "cold_bucket": s.coldBucket,
 		"batch_manifests_bucket": s.batchManifestsBucket,
-		"batch_reports_bucket": s.batchReportsBucket,
-		"batch_role_arn": s.batchRoleArn, "restore queue url": s.restoreQueueURL,
+		"batch_reports_bucket":   s.batchReportsBucket,
+		"batch_role_arn":         s.batchRoleArn, "restore queue url": s.restoreQueueURL,
 	} {
 		if v == "" {
 			return nil, fmt.Errorf("aws_config.%s is empty — re-run setup to provision the warmup infrastructure", name)

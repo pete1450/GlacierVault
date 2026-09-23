@@ -43,13 +43,28 @@ every restore costs **at least ~$0.25** before a single byte is retrieved.
 
 ### Data transfer out (egress)
 
+GlacierVault routes restore downloads through a private CloudFront
+distribution (signed URLs minted inside the appliance), so egress consumes
+**CloudFront's free data-transfer allowance** instead of paid S3 egress:
+
 | Volume | Price |
 |---|---|
-| First 100 GB/month | **free** |
-| Beyond that | $0.09/GB (first 10 TB) |
+| First 1 TB/month (all customers) | **free** |
+| 10 million HTTP/HTTPS requests/month | **free** |
+| Beyond that | ~$0.085/GB (US/Europe) |
 
-Egress is frequently the *largest* line item on a big restore. Uploads
-(transfer in) are free.
+Notes:
+
+- The 1 TB allowance is **account-wide and monthly**: it is shared with any
+  other CloudFront traffic in the account and resets each billing month.
+- Transfer from the S3 origin to CloudFront is free; there is no fixed
+  monthly charge for the distribution itself.
+- Backups (uploads) don't touch CloudFront at all — transfer *in* is free
+  regardless.
+
+Egress used to be the largest line item on a big restore. With the
+free-egress path, restores up to 1 TB in a month normally cost **$0** in
+transfer.
 
 ### The two Deep Archive fine-print items
 
@@ -66,7 +81,8 @@ Egress is frequently the *largest* line item on a big restore. Uploads
 ## Worked examples
 
 Assumptions: us-east-1, Bulk retrieval, restored copies kept 2 days (the app
-default), egress counted against the 100 GB/month free tier.
+default), egress counted against CloudFront's 1 TB/month free data-transfer
+allowance (account-wide; assumed otherwise unused here).
 
 ### Example 1 — Documents: 10 GB, ~50,000 small files
 
@@ -90,7 +106,7 @@ default), egress counted against the 100 GB/month free tier.
 | Retrieval data | 10 GB × $0.0025 | $0.025 |
 | Retrieval requests | 20 × $0.025/1K | ~$0.00 |
 | Batch job | $0.25 + (20 objects → ~$0.00) | $0.25 |
-| Egress | 10 GB < 100 GB free tier | $0.00 |
+| Egress | 10 GB, inside the 1 TB CloudFront allowance | $0.00 |
 | **Total** | | **≈ $0.28** |
 
 ### Example 2 — Family photo archive: 500 GB, ~40,000 photos
@@ -114,11 +130,12 @@ ongoing cost is a few packs per run — typically cents.
 | Retrieval data | 500 GB × $0.0025 | $1.25 |
 | Retrieval requests | 1,000 × $0.025/1K | $0.025 |
 | Batch job | $0.25 + (1,000 objects → $0.001) | $0.251 |
-| Egress | 500 − 100 free = 400 GB × $0.09 | **$36.00** |
-| **Total** | | **≈ $37.53** |
+| Egress | 500 GB, inside the 1 TB CloudFront allowance | **$0.00** |
+| **Total** | | **≈ $1.53** |
 
-Note how **egress dominates**: the Glacier retrieval itself is $1.53; getting
-the bytes out of AWS is $36. Restores under 100 GB/month dodge this entirely.
+Note how different this used to be: without the free-egress path, 500 GB of
+S3 egress was ~$36 and dominated the restore. Now the whole restore is the
+$1.53 of Glacier retrieval and request fees.
 
 **Partial restore — one 25 MB photo (Bulk):**
 
@@ -130,7 +147,7 @@ trade-off for cheap storage (see [Design](design.md)).
 |---|---|---|
 | Retrieval data | 0.5 GB × $0.0025 | $0.001 |
 | Batch job | $0.25 (one job per restore) | $0.25 |
-| Egress | < 100 GB free tier | $0.00 |
+| Egress | 0.5 GB, inside the CloudFront allowance | $0.00 |
 | **Total** | | **≈ $0.25** |
 
 Takeaway: partial restores are cheap in bytes, but each restore is a new
@@ -158,8 +175,14 @@ shrinks VM images noticeably before they ever hit S3.
 | Retrieval data | 2,048 GB × $0.0025 | $5.12 |
 | Retrieval requests | 4,096 × $0.025/1K | $0.10 |
 | Batch job | $0.25 + (4,096 objects → $0.004) | $0.254 |
-| Egress | 2,048 − 100 free = 1,948 GB × $0.09 | **$175.32** |
-| **Total** | | **≈ $180.79** |
+| Egress | first 1,024 GB free; remaining 1,024 GB × ~$0.085 | **≈ $87.04** |
+| **Total** | | **≈ $92.51** |
+
+The 1 TB free allowance covers the first half; only the second ~1 TB pays
+egress. (Without the free-egress path this restore was ~$181, almost all of
+it transfer.) A 2 TB restore could approach $0 egress only if the downloads
+were deliberately split across billing months — the app restores in one shot,
+so budget the overage above.
 
 **Same restore, Standard tier (urgent, ~12 h instead of ~48 h):**
 
@@ -167,8 +190,8 @@ shrinks VM images noticeably before they ever hit S3.
 |---|---|---|
 | Retrieval data | 2,048 GB × $0.02 (8× Bulk) | $40.96 |
 | Retrieval requests | 4,096 × $0.10/1K | $0.41 |
-| Batch job + egress | same as above | $175.57 |
-| **Total** | | **≈ $216.94** |
+| Batch job + egress | $0.254 + ~$87.04 | $87.29 |
+| **Total** | | **≈ $128.66** |
 
 Standard tier costs ~8× more on the retrieval line and only buys speed —
 egress is unchanged. GlacierVault defaults to Bulk; Standard is not currently
@@ -184,14 +207,16 @@ Even with no restores, you pay for:
 | Hot bucket (metadata) | a few GB for a TB-scale repo × $0.023 | <$0.10 |
 | Batch manifest/report buckets | kilobytes | $0.00 |
 | SQS queue | first 1M requests/month free | $0.00 |
+| CloudFront distribution | no fixed charge; requests inside the free tier | $0.00 |
 
 A 1 TB vault idles at roughly **$1.10/month**.
 
 ## Rules of thumb
 
-1. **Storage is nearly free; egress is the real restore cost.** For any
-   restore over 100 GB, budget $0.09/GB for transfer out — it will dwarf the
-   retrieval fees.
+1. **Egress is free up to 1 TB/month per account** via the CloudFront path.
+   Only restores (or other CloudFront traffic) beyond that pay ~$0.085/GB.
+   The allowance resets monthly and is shared with any other CloudFront use
+   in the account.
 2. **Big packs win twice.** 512 MiB packs minimize both PUT costs at backup
    time and request counts at restore time. The cost is coarser partial
    restores (a 1 KB file still thaws its whole 512 MiB pack).
