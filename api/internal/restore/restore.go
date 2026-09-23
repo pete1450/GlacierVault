@@ -13,6 +13,7 @@ import (
 	"github.com/glaciervault/api/internal/cloudfront"
 	appCrypto "github.com/glaciervault/api/internal/crypto"
 	"github.com/glaciervault/api/internal/engine"
+	"github.com/glaciervault/api/internal/notify"
 )
 
 // Retrieval tuning. Glacier Deep Archive Bulk tier restores can take up to
@@ -46,10 +47,11 @@ type Manager struct {
 	db     *sql.DB
 	engine *engine.Engine
 	cf     *cloudfront.Manager // localhost S3→CloudFront proxy lifecycle
+	notify *notify.Manager     // apprise notifications (nil-safe: skipped when nil)
 }
 
-func New(db *sql.DB, eng *engine.Engine, cf *cloudfront.Manager) *Manager {
-	return &Manager{db: db, engine: eng, cf: cf}
+func New(db *sql.DB, eng *engine.Engine, cf *cloudfront.Manager, n *notify.Manager) *Manager {
+	return &Manager{db: db, engine: eng, cf: cf, notify: n}
 }
 
 // Initiate creates a restore job record and starts the workflow asynchronously.
@@ -127,6 +129,9 @@ func (m *Manager) run(ctx context.Context, jobID, snapshotRowID int64, paths []s
 
 	m.db.ExecContext(ctx, `UPDATE restore_jobs SET completed_at=? WHERE id=?`, time.Now().UTC(), jobID)
 	m.setStatus(ctx, jobID, StatusCompleted, "")
+	if m.notify != nil {
+		m.notify.RestoreCompleted(jobID)
+	}
 	return nil
 }
 

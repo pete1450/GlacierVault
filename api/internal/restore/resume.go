@@ -65,6 +65,10 @@ func (m *Manager) watchForBatchJobID(ctx context.Context, jobID int64) func(stri
 		}
 		if n, _ := res.RowsAffected(); n > 0 {
 			log.Printf("restore job %d: warmup Batch job %s", jobID, id)
+			// The warmup tool blocks on SQS now; this watcher tracks the same
+			// Batch job via DescribeJob purely to fire the warmup-complete
+			// notification when Glacier reports the packs thawed.
+			go m.watchWarmupForNotification(context.Background(), jobID, id)
 		}
 	}
 }
@@ -116,6 +120,99 @@ func (m *Manager) ReconcileInterruptedJobs(ctx context.Context) {
 	}
 }
 
+// batchControlClient builds an S3 Control client from the stored deployment
+// credentials, plus the warmup settings (account ID for DescribeJob).
+func (m *Manager) batchControlClient(ctx context.Context) (*s3control.Client, *warmupSettings, error) {
+	s, err := m.loadAWSSettings(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	ws, err := m.loadWarmupSettings(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	awsCfg, err := awsconfig.LoadDefaultConfig(ctx,
+		awsconfig.WithRegion(s.region),
+		awsconfig.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(s.accessKey, s.secretKey, "")),
+	)
+	if err != nil {
+		return nil, nil, fmt.Errorf("load AWS config: %w", err)
+	}
+	return s3control.NewFromConfig(awsCfg), ws, nil
+}
+
+// watchWarmupForNotification polls the S3 Batch job until it completes and
+// then fires the warmup-complete notification exactly once. It covers the
+// happy path (container alive); after a restart, resumeAfterRestart takes
+// over and calls notifyWarmupOnce itself. The dedupe column makes double
+// delivery impossible even if both somehow observe completion.
+func (m *Manager) watchWarmupForNotification(ctx context.Context, jobID int64, batchJobID string) {
+	ctl, ws, err := m.batchControlClient(ctx)
+	if err != nil {
+		log.Printf("restore job %d: warmup notify: %v", jobID, err)
+		return
+	}
+
+	// Fresh deadline: Bulk restores can take up to 48h from submission.
+	ctx, cancel := context.WithTimeout(ctx, restoreTimeout)
+	defer cancel()
+
+	ticker := time.NewTicker(5 * time.Minute)
+	defer ticker.Stop()
+	for {
+		// Stop once the job left the warmup phases (download done, failed,
+		// or cancelled) — nothing left to notify about.
+		var status string
+		if err := m.db.QueryRowContext(ctx, `SELECT status FROM restore_jobs WHERE id=?`, jobID).Scan(&status); err == nil {
+			switch status {
+			case StatusCompleted, StatusFailed:
+				return
+			}
+		}
+		out, err := ctl.DescribeJob(ctx, &s3control.DescribeJobInput{
+			AccountId: aws.String(ws.accountID),
+			JobId:     aws.String(batchJobID),
+		})
+		if err != nil {
+			log.Printf("restore job %d: warmup notify DescribeJob %s: %v", jobID, batchJobID, err)
+		} else {
+			switch out.Job.Status {
+			case types.JobStatusComplete:
+				m.notifyWarmupOnce(jobID, batchJobID)
+				return
+			case types.JobStatusFailed, types.JobStatusCancelled:
+				// The restore itself reports the failure; no warmup notification.
+				return
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
+}
+
+// notifyWarmupOnce fires the warmup-complete notification at most once per
+// restore job. warmup_notified_at acts as an atomic claim so the happy-path
+// watcher and the restart-resume path cannot double-deliver.
+func (m *Manager) notifyWarmupOnce(jobID int64, batchJobID string) {
+	if m.notify == nil {
+		return
+	}
+	res, err := m.db.ExecContext(context.Background(),
+		`UPDATE restore_jobs SET warmup_notified_at=? WHERE id=? AND warmup_notified_at IS NULL`,
+		time.Now().UTC(), jobID)
+	if err != nil {
+		log.Printf("restore job %d: warmup notify claim: %v", jobID, err)
+		return
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return // already notified
+	}
+	m.notify.WarmupCompleted(jobID, batchJobID)
+}
+
 // resumeAfterRestart re-attaches to the S3 Batch restore job recorded in
 // batch_job_id and, once Glacier reports the packs restored, runs the
 // download phase (plain rustic restore, no warmup step needed).
@@ -123,26 +220,11 @@ func (m *Manager) resumeAfterRestart(ctx context.Context, jobID int64, batchJobI
 	buf := engine.GetBuffer(jobID)
 	buf.Write(fmt.Sprintf("[restore] container restarted during warmup — re-attached to S3 Batch job %s", batchJobID))
 
-	s, err := m.loadAWSSettings(ctx)
+	ctl, ws, err := m.batchControlClient(ctx)
 	if err != nil {
 		m.setStatus(ctx, jobID, StatusFailed, fmt.Sprintf("resume after restart: %v", err))
 		return
 	}
-	ws, err := m.loadWarmupSettings(ctx)
-	if err != nil {
-		m.setStatus(ctx, jobID, StatusFailed, fmt.Sprintf("resume after restart: %v", err))
-		return
-	}
-
-	awsCfg, err := awsconfig.LoadDefaultConfig(ctx,
-		awsconfig.WithRegion(s.region),
-		awsconfig.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(s.accessKey, s.secretKey, "")),
-	)
-	if err != nil {
-		m.setStatus(ctx, jobID, StatusFailed, fmt.Sprintf("resume after restart: load AWS config: %v", err))
-		return
-	}
-	ctl := s3control.NewFromConfig(awsCfg)
 
 	// Fresh deadline for the resumed wait: Bulk restores can take up to 48h
 	// from submission. Poll DescribeJob (stateless — safe across restarts).
@@ -170,6 +252,7 @@ func (m *Manager) resumeAfterRestart(ctx context.Context, jobID int64, batchJobI
 			switch out.Job.Status {
 			case types.JobStatusComplete:
 				m.setStatus(ctx, jobID, StatusRetrievalComplete, "")
+				m.notifyWarmupOnce(jobID, batchJobID)
 				buf.Write("[restore] Glacier retrieval complete — downloading packs")
 				m.downloadAfterWarmup(ctx, jobID, buf)
 				return
@@ -245,4 +328,7 @@ func (m *Manager) downloadAfterWarmup(ctx context.Context, jobID int64, buf *eng
 	}
 	m.db.ExecContext(ctx, `UPDATE restore_jobs SET completed_at=? WHERE id=?`, time.Now().UTC(), jobID)
 	m.setStatus(ctx, jobID, StatusCompleted, "")
+	if m.notify != nil {
+		m.notify.RestoreCompleted(jobID)
+	}
 }

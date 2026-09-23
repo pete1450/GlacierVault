@@ -155,3 +155,7 @@ restore and confirm the files.
 - **Rotate the UI password** if it was ever generated into logs.
 - **Watch for the 100 GB egress budget** if you restore often — it's per
   calendar month across the whole AWS account.
+- **Set up notifications.** Add your Apprise destination URLs in Settings →
+  Notifications and flip on the events you care about (backup completed,
+  warmup complete, restore complete) so a 48-hour Bulk warmup doesn't need
+  babysitting.

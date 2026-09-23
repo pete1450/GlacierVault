@@ -79,6 +79,19 @@ export const enableCloudFront = (accessKey: string, secretKey: string) =>
   req<{ status: string }>('POST', '/settings/cloudfront/enable', { accessKey, secretKey })
 export const disableCloudFront = () => req<{ status: string }>('POST', '/settings/cloudfront/disable')
 
+// Notifications (apprise)
+export interface NotificationConfig {
+  destinations: string[]
+  notifyBackupCompleted: boolean
+  notifyWarmupCompleted: boolean
+  notifyRestoreCompleted: boolean
+}
+export const getNotificationConfig = () => req<NotificationConfig>('GET', '/notifications/config')
+export const saveNotificationConfig = (cfg: NotificationConfig) =>
+  req<{ ok: boolean }>('PUT', '/notifications/config', cfg)
+export const testNotification = (destinations: string[]) =>
+  req<{ ok: boolean }>('POST', '/notifications/test', { destinations })
+
 // Types
 export interface SetupStatus {
   setupComplete: boolean

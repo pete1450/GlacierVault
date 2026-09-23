@@ -12,6 +12,7 @@ import (
 
 	"github.com/glaciervault/api/internal/catalog"
 	"github.com/glaciervault/api/internal/engine"
+	"github.com/glaciervault/api/internal/notify"
 )
 
 // namedSchedules maps friendly names to cron expressions.
@@ -48,16 +49,18 @@ type Scheduler struct {
 	db      *sql.DB
 	engine  *engine.Engine
 	catalog *catalog.Catalog
+	notify  *notify.Manager // apprise notifications (nil-safe: skipped when nil)
 	entries map[int64]cron.EntryID
 	runFn   func(def BackupDef) // injectable for testing
 }
 
-func New(db *sql.DB, eng *engine.Engine, cat *catalog.Catalog) *Scheduler {
+func New(db *sql.DB, eng *engine.Engine, cat *catalog.Catalog, n *notify.Manager) *Scheduler {
 	s := &Scheduler{
 		cron:    cron.New(),
 		db:      db,
 		engine:  eng,
 		catalog: cat,
+		notify:  n,
 		entries: make(map[int64]cron.EntryID),
 	}
 	s.runFn = s.runBackup
@@ -182,6 +185,10 @@ func (s *Scheduler) runBackup(def BackupDef) {
 		WHERE id=?`,
 		status, time.Now().UTC(), errMsg, logLines, jobID,
 	)
+
+	if status == "completed" && s.notify != nil {
+		s.notify.BackupCompleted(def.Name)
+	}
 }
 
 func (s *Scheduler) loadDefs(ctx context.Context) ([]BackupDef, error) {
