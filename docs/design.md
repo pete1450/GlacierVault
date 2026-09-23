@@ -201,6 +201,17 @@ UI: pick snapshot → browse → select files (or nothing = full) → destinatio
   5. job marked completed; log retained on the restore record
 ```
 
+**Restart resilience:** the moment warmup-s3-archives submits the Batch
+job, its job ID is captured from the tool's output and persisted to
+`restore_jobs.batch_job_id` (status advances to `retrieval_in_progress`).
+If the container restarts mid-warmup, startup reconciliation triages every
+non-terminal job: rows with no Batch job ID are marked failed (nothing was
+submitted server-side; safe to retry), while rows with a job ID resume — a
+background goroutine polls `s3:DescribeJob` until the job completes and
+then runs step 4 as a plain download-only restore (no second Batch job, no
+second 48 h wait). The Batch job ID is also exposed on the job-detail API
+as `batchJobId` for debugging.
+
 Restore stages shown in the UI: `queued → warmup_requested →
 retrieval_in_progress → retrieval_complete → restoring → completed`
 (`failed` on error). The long pole is step 3 — Bulk retrieval can take up to

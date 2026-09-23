@@ -62,6 +62,11 @@ func main() {
 	}
 	restoreMgr := restore.New(database, eng, cfMgr)
 
+	// Re-attach to restore warmups interrupted by a container restart:
+	// jobs that recorded an S3 Batch job ID resume waiting on it, the rest
+	// are marked failed (safe to retry). Runs async; never blocks startup.
+	go restoreMgr.ReconcileInterruptedJobs(context.Background())
+
 	sched := scheduler.New(database, eng, cat)
 	if err := sched.Start(context.Background()); err != nil {
 		log.Printf("scheduler start: %v", err)

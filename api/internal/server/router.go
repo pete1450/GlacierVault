@@ -942,13 +942,13 @@ func (s *Server) handleListRestores(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleGetRestore(w http.ResponseWriter, r *http.Request) {
 	id, _ := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
 	row := s.DB.QueryRowContext(r.Context(),
-		`SELECT id, snapshot_id, requested_paths, destination, status, warmup_status, retrieval_started_at, restore_started_at, completed_at, error_message, created_at FROM restore_jobs WHERE id=?`, id)
+		`SELECT id, snapshot_id, requested_paths, destination, status, warmup_status, retrieval_started_at, restore_started_at, completed_at, error_message, created_at, batch_job_id FROM restore_jobs WHERE id=?`, id)
 	var rid, snapshotID int64
 	var requestedPaths, destination, status string
-	var warmupStatus, errMsg sql.NullString
+	var warmupStatus, errMsg, batchJobID sql.NullString
 	var retrievalStarted, restoreStarted, completedAt, createdAt sql.NullTime
 	if err := row.Scan(&rid, &snapshotID, &requestedPaths, &destination, &status, &warmupStatus,
-		&retrievalStarted, &restoreStarted, &completedAt, &errMsg, &createdAt); err != nil {
+		&retrievalStarted, &restoreStarted, &completedAt, &errMsg, &createdAt, &batchJobID); err != nil {
 		writeError(w, http.StatusNotFound, "not found")
 		return
 	}
@@ -957,8 +957,9 @@ func (s *Server) handleGetRestore(w http.ResponseWriter, r *http.Request) {
 		"destination": destination, "status": status, "warmupStatus": warmupStatus.String,
 		"retrievalStartedAt": nullTimeStr(retrievalStarted), "restoreStartedAt": nullTimeStr(restoreStarted),
 		"completedAt": nullTimeStr(completedAt), "errorMessage": errMsg.String,
-		"logOutput": strings.Join(engine.GetBuffer(id).Lines(), "\n"),
-		"createdAt": createdAt.Time,
+		"batchJobId": batchJobID.String,
+		"logOutput":  strings.Join(engine.GetBuffer(id).Lines(), "\n"),
+		"createdAt":  createdAt.Time,
 	})
 }
 

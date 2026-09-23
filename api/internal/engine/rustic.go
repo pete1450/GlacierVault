@@ -143,6 +143,14 @@ func (e *Engine) runStreamingWith(ctx context.Context, buf *RingBuffer, env []st
 // points the cold backend at the localhost CloudFront proxy while every
 // other operation keeps using the standard config.
 func (e *Engine) runStreamingWithProfile(ctx context.Context, buf *RingBuffer, env []string, dir, configPath string, args ...string) ([]byte, error) {
+	return e.runStreamingWithProfileHook(ctx, buf, env, dir, configPath, nil, args...)
+}
+
+// runStreamingWithProfileHook is runStreamingWithProfile with a per-line
+// callback invoked for every line the child process emits. The restore
+// manager uses it to capture the S3 Batch job ID from warmup-s3-archives'
+// output as soon as the tool submits the job.
+func (e *Engine) runStreamingWithProfileHook(ctx context.Context, buf *RingBuffer, env []string, dir, configPath string, hook func(string), args ...string) ([]byte, error) {
 	cmdArgs := append([]string{"-P", strings.TrimSuffix(configPath, ".toml")}, args...)
 	cmd := exec.CommandContext(ctx, rusticBin, cmdArgs...)
 	if len(env) > 0 {
@@ -169,6 +177,9 @@ func (e *Engine) runStreamingWithProfile(ctx context.Context, buf *RingBuffer, e
 			output.WriteString(line + "\n")
 			if buf != nil {
 				buf.Write(line)
+			}
+			if hook != nil {
+				hook(line)
 			}
 		}
 	}()
@@ -359,6 +370,11 @@ type RestoreOptions struct {
 	// this restore only. Used to point the cold backend at the localhost
 	// CloudFront proxy; empty means the engine's default config.
 	ConfigPath string
+	// LineHook, when set, is invoked for every line the rustic process
+	// emits. The restore manager uses it to capture the S3 Batch job ID
+	// from warmup-s3-archives' output as soon as the tool submits the job,
+	// so a container restart can re-attach to the in-flight warmup.
+	LineHook func(string)
 }
 
 // RunRestore executes rustic restore for a snapshot to destination.
@@ -379,7 +395,7 @@ func (e *Engine) RunRestore(ctx context.Context, buf *RingBuffer, snapshotID, de
 			"--warm-up-batch", "1000",
 		)
 	}
-	_, err := e.runStreamingWithProfile(ctx, buf, opts.Env, opts.Dir, e.profileForRestore(opts), args...)
+	_, err := e.runStreamingWithProfileHook(ctx, buf, opts.Env, opts.Dir, e.profileForRestore(opts), opts.LineHook, args...)
 	return err
 }
 

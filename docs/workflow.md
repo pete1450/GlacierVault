@@ -82,6 +82,17 @@ job. Plan restores; batch small ones together.
 - When retrieval completes, rustic downloads the packs and writes your files.
   This part is fast.
 
+**Surviving a container restart:** if the container goes down while a
+restore is waiting on Glacier, the job is not lost. GlacierVault records
+the S3 Batch job ID the moment the warmup tool submits it; on startup,
+interrupted jobs are triaged automatically — jobs that never submitted a
+Batch job are marked failed (safe to retry), while jobs with a recorded
+Batch job ID **resume**: the server re-attaches to the in-flight Batch job
+and runs the download as soon as Glacier reports the packs restored. No
+duplicate Batch job, no second 48-hour wait. (Caveat: the temporary
+restored copies expire after 2 days, so a restart that lasts days still
+needs a fresh restore.)
+
 **Partial vs. full restore costs** (us-east-1, Bulk, CloudFront free-egress path enabled):
 
 | Restore | Approx. cost | Why |

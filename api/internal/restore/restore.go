@@ -120,6 +120,7 @@ func (m *Manager) run(ctx context.Context, jobID, snapshotRowID int64, paths []s
 		Env:        env,
 		Dir:        workDir,
 		ConfigPath: m.cfRestoreProfile(ctx, buf, workDir),
+		LineHook:   m.watchForBatchJobID(ctx, jobID),
 	}); err != nil {
 		return fmt.Errorf("rustic restore: %w", err)
 	}
