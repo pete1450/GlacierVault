@@ -32,7 +32,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     nodejs \
     npm \
     python3 \
+    python3-pip \
     && rm -rf /var/lib/apt/lists/*
+
+# Apprise: notification dispatcher (Discord, Slack, Telegram, email, ntfy,
+# webhooks, ...). The Go API shells out to the `apprise` CLI; destinations
+# are user-configured URLs in Settings.
+RUN pip3 install --break-system-packages --no-cache-dir apprise \
+    && apprise --version
 
 # AWS CLI v2.
 RUN curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o /tmp/awscli.zip \

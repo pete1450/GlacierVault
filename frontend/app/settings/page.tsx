@@ -5,10 +5,27 @@ import Nav from '@/components/Nav'
 import {
   changePassword, logout, rebuildCatalog, getSetupStatus, type SetupStatus,
   getCloudFrontStatus, enableCloudFront, disableCloudFront, type CloudFrontStatus,
+  getNotificationConfig, saveNotificationConfig, testNotification,
 } from '@/lib/api'
 
-export default function SettingsPage() {
-  const router = useRouter()
+function Toggle({ on, onChange, label }: { on: boolean; onChange: (v: boolean) => void; label: string }) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={on}
+      aria-label={label}
+      onClick={() => onChange(!on)}
+      className={`relative w-10 h-6 shrink-0 rounded-full transition-colors ${on ? 'bg-blue-600' : 'bg-gray-700'}`}
+    >
+      <span
+        className={`absolute top-0.5 w-5 h-5 rounded-full bg-white transition-all ${on ? 'left-[18px]' : 'left-0.5'}`}
+      />
+    </button>
+  )
+}
+
+export default function SettingsPage() {  const router = useRouter()
   const [status, setStatus] = useState<SetupStatus | null>(null)
   const [cf, setCf] = useState<CloudFrontStatus | null>(null)
 
@@ -28,9 +45,24 @@ export default function SettingsPage() {
   const [cfMsg, setCfMsg] = useState('')
   const [cfBusy, setCfBusy] = useState(false)
 
+  // Notifications (apprise)
+  const [destinations, setDestinations] = useState('')
+  const [swBackup, setSwBackup] = useState(false)
+  const [swWarmup, setSwWarmup] = useState(false)
+  const [swRestore, setSwRestore] = useState(false)
+  const [notifyMsg, setNotifyMsg] = useState('')
+  const [notifySaving, setNotifySaving] = useState(false)
+  const [notifyTesting, setNotifyTesting] = useState(false)
+
   useEffect(() => {
     getSetupStatus().then(setStatus).catch(() => {})
     getCloudFrontStatus().then(setCf).catch(() => {})
+    getNotificationConfig().then(cfg => {
+      setDestinations((cfg.destinations || []).join('\n'))
+      setSwBackup(cfg.notifyBackupCompleted)
+      setSwWarmup(cfg.notifyWarmupCompleted)
+      setSwRestore(cfg.notifyRestoreCompleted)
+    }).catch(() => {})
   }, [])
 
   async function refreshCf() {
@@ -104,6 +136,41 @@ export default function SettingsPage() {
   async function handleLogout() {
     try { await logout() } catch {}
     router.push('/login')
+  }
+
+  function destinationList() {
+    return destinations.split('\n').map(s => s.trim()).filter(Boolean)
+  }
+
+  async function handleNotifySave() {
+    setNotifyMsg('')
+    setNotifySaving(true)
+    try {
+      await saveNotificationConfig({
+        destinations: destinationList(),
+        notifyBackupCompleted: swBackup,
+        notifyWarmupCompleted: swWarmup,
+        notifyRestoreCompleted: swRestore,
+      })
+      setNotifyMsg('Notification settings saved.')
+    } catch (err: any) {
+      setNotifyMsg(`Error: ${err.message}`)
+    } finally {
+      setNotifySaving(false)
+    }
+  }
+
+  async function handleNotifyTest() {
+    setNotifyMsg('')
+    setNotifyTesting(true)
+    try {
+      await testNotification(destinationList())
+      setNotifyMsg('Test notification sent — check your destinations.')
+    } catch (err: any) {
+      setNotifyMsg(`Error: ${err.message}`)
+    } finally {
+      setNotifyTesting(false)
+    }
   }
 
   return (
@@ -202,6 +269,71 @@ export default function SettingsPage() {
             </button>
           )}
           {cfMsg && <p className="text-sm text-gray-300">{cfMsg}</p>}
+        </section>
+
+        {/* Notifications */}
+        <section className="bg-gray-900 rounded-xl p-6 space-y-4">
+          <h2 className="font-semibold text-lg">Notifications</h2>
+          <p className="text-sm text-gray-400">
+            GlacierVault sends notifications through{' '}
+            <a href="https://github.com/caronc/apprise/wiki" target="_blank" rel="noreferrer" className="text-blue-400 hover:underline">
+              Apprise
+            </a>
+            , which supports Discord, Slack, Telegram, email, ntfy, Gotify, webhooks and
+            dozens more. Add one destination URL per line — pick the format for your
+            service from the Apprise wiki.
+          </p>
+          <div>
+            <label className="block text-sm text-gray-300 mb-1">Destination URLs (one per line)</label>
+            <textarea
+              value={destinations}
+              onChange={e => setDestinations(e.target.value)}
+              rows={4}
+              spellCheck={false}
+              placeholder={'discord://webhook_id/webhook_token\nntfy://ntfy.sh/my-topic'}
+              className="w-full px-3 py-2 bg-gray-800 text-white rounded-lg border border-gray-700 focus:outline-none focus:border-blue-500 text-sm font-mono"
+            />
+          </div>
+          <div className="space-y-3">
+            <div className="flex items-center gap-3">
+              <Toggle on={swBackup} onChange={setSwBackup} label="Backup completed" />
+              <div>
+                <div className="text-sm">Backup completed</div>
+                <div className="text-xs text-gray-500">When a scheduled or manual backup finishes successfully.</div>
+              </div>
+            </div>
+            <div className="flex items-center gap-3">
+              <Toggle on={swWarmup} onChange={setSwWarmup} label="Warmup complete" />
+              <div>
+                <div className="text-sm">Warmup complete</div>
+                <div className="text-xs text-gray-500">When Glacier finishes thawing a restore's packs and the download starts.</div>
+              </div>
+            </div>
+            <div className="flex items-center gap-3">
+              <Toggle on={swRestore} onChange={setSwRestore} label="Restore complete" />
+              <div>
+                <div className="text-sm">Restore complete</div>
+                <div className="text-xs text-gray-500">When a restore finishes and the files are on disk.</div>
+              </div>
+            </div>
+          </div>
+          <div className="flex flex-wrap gap-3">
+            <button
+              onClick={handleNotifySave}
+              disabled={notifySaving}
+              className="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-700 rounded-lg text-sm font-medium transition-colors"
+            >
+              {notifySaving ? 'Saving…' : 'Save notification settings'}
+            </button>
+            <button
+              onClick={handleNotifyTest}
+              disabled={notifyTesting}
+              className="px-4 py-2 bg-gray-700 hover:bg-gray-600 disabled:opacity-50 rounded-lg text-sm transition-colors"
+            >
+              {notifyTesting ? 'Sending…' : 'Send test notification'}
+            </button>
+          </div>
+          {notifyMsg && <p className={`text-sm ${notifyMsg.startsWith('Error') ? 'text-red-400' : 'text-green-400'}`}>{notifyMsg}</p>}
         </section>
 
         {/* Recovery */}

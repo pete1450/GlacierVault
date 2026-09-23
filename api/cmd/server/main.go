@@ -16,6 +16,7 @@ import (
 	appCrypto "github.com/glaciervault/api/internal/crypto"
 	"github.com/glaciervault/api/internal/db"
 	"github.com/glaciervault/api/internal/engine"
+	"github.com/glaciervault/api/internal/notify"
 	"github.com/glaciervault/api/internal/restore"
 	"github.com/glaciervault/api/internal/scheduler"
 	"github.com/glaciervault/api/internal/server"
@@ -60,14 +61,15 @@ func main() {
 	if err := cfMgr.Reload(); err != nil {
 		log.Printf("cloudfront proxy: %v", err)
 	}
-	restoreMgr := restore.New(database, eng, cfMgr)
+	notifyMgr := notify.New(database)
+	restoreMgr := restore.New(database, eng, cfMgr, notifyMgr)
 
 	// Re-attach to restore warmups interrupted by a container restart:
 	// jobs that recorded an S3 Batch job ID resume waiting on it, the rest
 	// are marked failed (safe to retry). Runs async; never blocks startup.
 	go restoreMgr.ReconcileInterruptedJobs(context.Background())
 
-	sched := scheduler.New(database, eng, cat)
+	sched := scheduler.New(database, eng, cat, notifyMgr)
 	if err := sched.Start(context.Background()); err != nil {
 		log.Printf("scheduler start: %v", err)
 	}
@@ -82,6 +84,7 @@ func main() {
 		Scheduler:  sched,
 		RestoreMgr: restoreMgr,
 		CFManager:  cfMgr,
+		Notify:     notifyMgr,
 		JWTSecret:  jwtSecret,
 		ConfigPath: configDir,
 	}

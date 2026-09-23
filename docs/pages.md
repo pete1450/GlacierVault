@@ -99,6 +99,14 @@ on the Bulk tier — that's Glacier working, not the app stuck. Budget up to
   password, manual restore instructions — store it somewhere safe) and
   **Rebuild snapshot catalog** (re-indexes snapshots from the hot repo; use
   if snapshots go missing after a disruption).
+- **Notifications:** Apprise destination URLs (one per line —
+  `discord://…`, `ntfy://…`, `mailto://…`, any service Apprise supports; see
+  the Apprise wiki for URL formats) plus on/off switches for **backup
+  completed**, **warmup complete** (Glacier finished thawing a restore's
+  packs), and **restore complete**. The API shells out to the `apprise` CLI
+  in the container; **Send test notification** verifies your URLs before you
+  rely on them. Events dispatch in the background and never block a backup
+  or restore.
 - **Account:** change the UI password (min 8 chars), log out.
 
 ## Setup (`/setup`)

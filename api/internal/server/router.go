@@ -25,6 +25,7 @@ import (
 	"github.com/glaciervault/api/internal/cloudfront"
 	appCrypto "github.com/glaciervault/api/internal/crypto"
 	"github.com/glaciervault/api/internal/engine"
+	"github.com/glaciervault/api/internal/notify"
 	"github.com/glaciervault/api/internal/provisioning"
 	"github.com/glaciervault/api/internal/restore"
 	"github.com/glaciervault/api/internal/scheduler"
@@ -40,6 +41,7 @@ type Server struct {
 	Scheduler  *scheduler.Scheduler
 	RestoreMgr *restore.Manager
 	CFManager  *cloudfront.Manager
+	Notify     *notify.Manager
 	JWTSecret  []byte
 	ConfigPath string
 }
@@ -99,6 +101,11 @@ func (s *Server) Router() http.Handler {
 		r.Get("/api/settings/cloudfront", s.handleCloudFrontStatus)
 		r.Post("/api/settings/cloudfront/enable", s.handleCloudFrontEnable)
 		r.Post("/api/settings/cloudfront/disable", s.handleCloudFrontDisable)
+
+		// Notifications (apprise).
+		r.Get("/api/notifications/config", s.handleGetNotificationConfig)
+		r.Put("/api/notifications/config", s.handleSaveNotificationConfig)
+		r.Post("/api/notifications/test", s.handleTestNotification)
 
 		// Recovery package.
 		r.Get("/api/recovery/package", s.handleRecoveryPackage)
@@ -611,6 +618,9 @@ func (s *Server) handleRunBackupNow(w http.ResponseWriter, r *http.Request) {
 		s.DB.ExecContext(ctx, `UPDATE backup_jobs SET status=?, completed_at=?, error_message=?, log_output=? WHERE id=?`,
 			status, time.Now().UTC(), errMsg, logText, jobID)
 		if err == nil {
+			if s.Notify != nil {
+				s.Notify.BackupCompleted(name)
+			}
 			if syncErr := s.Catalog.SyncAfterBackup(ctx, defID); syncErr != nil {
 				// Surface catalog sync failures on the job record — a silent
 				// failure here is what made snapshots never appear in the UI.
