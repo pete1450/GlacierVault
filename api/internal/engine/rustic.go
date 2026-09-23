@@ -135,7 +135,23 @@ func (e *Engine) runStreaming(ctx context.Context, buf *RingBuffer, args ...stri
 // runStreamingWith is runStreaming with extra environment and an optional
 // working directory for the child process.
 func (e *Engine) runStreamingWith(ctx context.Context, buf *RingBuffer, env []string, dir string, args ...string) ([]byte, error) {
-	cmdArgs := append(e.baseArgs(), args...)
+	return e.runStreamingWithProfile(ctx, buf, env, dir, e.configPath, args...)
+}
+
+// runStreamingWithProfile is runStreamingWith using an explicit rustic
+// profile (config file). It exists so restores can use a per-job config that
+// points the cold backend at the localhost CloudFront proxy while every
+// other operation keeps using the standard config.
+func (e *Engine) runStreamingWithProfile(ctx context.Context, buf *RingBuffer, env []string, dir, configPath string, args ...string) ([]byte, error) {
+	return e.runStreamingWithProfileHook(ctx, buf, env, dir, configPath, nil, args...)
+}
+
+// runStreamingWithProfileHook is runStreamingWithProfile with a per-line
+// callback invoked for every line the child process emits. The restore
+// manager uses it to capture the S3 Batch job ID from warmup-s3-archives'
+// output as soon as the tool submits the job.
+func (e *Engine) runStreamingWithProfileHook(ctx context.Context, buf *RingBuffer, env []string, dir, configPath string, hook func(string), args ...string) ([]byte, error) {
+	cmdArgs := append([]string{"-P", strings.TrimSuffix(configPath, ".toml")}, args...)
 	cmd := exec.CommandContext(ctx, rusticBin, cmdArgs...)
 	if len(env) > 0 {
 		cmd.Env = env
@@ -161,6 +177,9 @@ func (e *Engine) runStreamingWith(ctx context.Context, buf *RingBuffer, env []st
 			output.WriteString(line + "\n")
 			if buf != nil {
 				buf.Write(line)
+			}
+			if hook != nil {
+				hook(line)
 			}
 		}
 	}()
@@ -212,6 +231,7 @@ func (e *Engine) RunBackup(ctx context.Context, buf *RingBuffer, sourcePaths []s
 // `snapshots --json` grouping format has changed across rustic versions:
 //   - rustic 0.11+: [{"group_key": {...}, "snapshots": [...]}, ...]
 //   - rustic 0.9.x:  [[group, [snapshots...]], ...]
+//
 // A plain flat array is accepted as a final fallback. All shapes are
 // flattened into one list.
 func (e *Engine) ListSnapshots(ctx context.Context) ([]Snapshot, error) {
@@ -346,6 +366,15 @@ type RestoreOptions struct {
 	// Dir is the working directory for the rustic process.
 	// warmup-s3-archives reads warmup-s3-archives-config.toml from it.
 	Dir string
+	// ConfigPath optionally overrides the rustic profile (config file) for
+	// this restore only. Used to point the cold backend at the localhost
+	// CloudFront proxy; empty means the engine's default config.
+	ConfigPath string
+	// LineHook, when set, is invoked for every line the rustic process
+	// emits. The restore manager uses it to capture the S3 Batch job ID
+	// from warmup-s3-archives' output as soon as the tool submits the job,
+	// so a container restart can re-attach to the in-flight warmup.
+	LineHook func(string)
 }
 
 // RunRestore executes rustic restore for a snapshot to destination.
@@ -366,8 +395,17 @@ func (e *Engine) RunRestore(ctx context.Context, buf *RingBuffer, snapshotID, de
 			"--warm-up-batch", "1000",
 		)
 	}
-	_, err := e.runStreamingWith(ctx, buf, opts.Env, opts.Dir, args...)
+	_, err := e.runStreamingWithProfileHook(ctx, buf, opts.Env, opts.Dir, e.profileForRestore(opts), opts.LineHook, args...)
 	return err
+}
+
+// profileForRestore selects the rustic config for a restore: the per-restore
+// override when set, otherwise the engine default.
+func (e *Engine) profileForRestore(opts RestoreOptions) string {
+	if opts.ConfigPath != "" {
+		return opts.ConfigPath
+	}
+	return e.configPath
 }
 
 // RepoInfo summarizes repository storage usage.

@@ -21,8 +21,9 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	"golang.org/x/crypto/bcrypt"
 
-	appCrypto "github.com/glaciervault/api/internal/crypto"
 	"github.com/glaciervault/api/internal/catalog"
+	"github.com/glaciervault/api/internal/cloudfront"
+	appCrypto "github.com/glaciervault/api/internal/crypto"
 	"github.com/glaciervault/api/internal/engine"
 	"github.com/glaciervault/api/internal/provisioning"
 	"github.com/glaciervault/api/internal/restore"
@@ -33,13 +34,14 @@ const jwtSecret = "" // set via Server.JWTSecret
 
 // Server holds all dependencies and the HTTP handler.
 type Server struct {
-	DB          *sql.DB
-	Engine      *engine.Engine
-	Catalog     *catalog.Catalog
-	Scheduler   *scheduler.Scheduler
-	RestoreMgr  *restore.Manager
-	JWTSecret   []byte
-	ConfigPath  string
+	DB         *sql.DB
+	Engine     *engine.Engine
+	Catalog    *catalog.Catalog
+	Scheduler  *scheduler.Scheduler
+	RestoreMgr *restore.Manager
+	CFManager  *cloudfront.Manager
+	JWTSecret  []byte
+	ConfigPath string
 }
 
 func (s *Server) Router() http.Handler {
@@ -92,6 +94,11 @@ func (s *Server) Router() http.Handler {
 
 		// Catalog.
 		r.Post("/api/catalog/rebuild", s.handleRebuildCatalog)
+
+		// CloudFront free-egress restore path.
+		r.Get("/api/settings/cloudfront", s.handleCloudFrontStatus)
+		r.Post("/api/settings/cloudfront/enable", s.handleCloudFrontEnable)
+		r.Post("/api/settings/cloudfront/disable", s.handleCloudFrontDisable)
 
 		// Recovery package.
 		r.Get("/api/recovery/package", s.handleRecoveryPackage)
@@ -337,6 +344,32 @@ func (s *Server) handleDeploy(w http.ResponseWriter, r *http.Request) {
 			outputs.HotBucket, outputs.ColdBucket, outputs.BatchManifestsBucket, outputs.BatchReportsBucket,
 			outputs.SQSUrl, outputs.IAMUser, outputs.BatchRoleArn, time.Now().UTC(),
 		)
+
+		// Provision the CloudFront free-egress path while the setup
+		// credentials are still available. Non-fatal: if it fails, the
+		// deployment still completes and the user can enable it later from
+		// Settings with another set of temporary admin credentials.
+		buf.Write("Provisioning CloudFront free-egress distribution...")
+		cfInfo, cfKeyPEM, err := cloudfront.Ensure(ctx, cloudfront.EnsureConfig{
+			Region:     body.Region,
+			ColdBucket: outputs.ColdBucket,
+			StackName:  body.StackName,
+			AccessKey:  body.AccessKey,
+			SecretKey:  body.SecretKey,
+			Log:        buf.Write,
+		})
+		if err != nil {
+			buf.Write("[warn] CloudFront provisioning failed: " + err.Error())
+			buf.Write("[warn] Restores will use paid S3 egress until you enable it in Settings.")
+		} else {
+			if err := cloudfront.Save(s.DB, cfInfo, cfKeyPEM); err != nil {
+				buf.Write("[warn] Could not save CloudFront config: " + err.Error())
+			} else if err := s.CFManager.Reload(); err != nil {
+				buf.Write("[warn] CloudFront proxy did not start: " + err.Error())
+			} else {
+				buf.Write("CloudFront free-egress path ready: " + cfInfo.Domain)
+			}
+		}
 
 		// Write rustic config and generate repo password.
 		buf.Write("Writing Rustic config...")
@@ -909,13 +942,13 @@ func (s *Server) handleListRestores(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleGetRestore(w http.ResponseWriter, r *http.Request) {
 	id, _ := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
 	row := s.DB.QueryRowContext(r.Context(),
-		`SELECT id, snapshot_id, requested_paths, destination, status, warmup_status, retrieval_started_at, restore_started_at, completed_at, error_message, created_at FROM restore_jobs WHERE id=?`, id)
+		`SELECT id, snapshot_id, requested_paths, destination, status, warmup_status, retrieval_started_at, restore_started_at, completed_at, error_message, created_at, batch_job_id FROM restore_jobs WHERE id=?`, id)
 	var rid, snapshotID int64
 	var requestedPaths, destination, status string
-	var warmupStatus, errMsg sql.NullString
+	var warmupStatus, errMsg, batchJobID sql.NullString
 	var retrievalStarted, restoreStarted, completedAt, createdAt sql.NullTime
 	if err := row.Scan(&rid, &snapshotID, &requestedPaths, &destination, &status, &warmupStatus,
-		&retrievalStarted, &restoreStarted, &completedAt, &errMsg, &createdAt); err != nil {
+		&retrievalStarted, &restoreStarted, &completedAt, &errMsg, &createdAt, &batchJobID); err != nil {
 		writeError(w, http.StatusNotFound, "not found")
 		return
 	}
@@ -924,8 +957,9 @@ func (s *Server) handleGetRestore(w http.ResponseWriter, r *http.Request) {
 		"destination": destination, "status": status, "warmupStatus": warmupStatus.String,
 		"retrievalStartedAt": nullTimeStr(retrievalStarted), "restoreStartedAt": nullTimeStr(restoreStarted),
 		"completedAt": nullTimeStr(completedAt), "errorMessage": errMsg.String,
-		"logOutput": strings.Join(engine.GetBuffer(id).Lines(), "\n"),
-		"createdAt": createdAt.Time,
+		"batchJobId": batchJobID.String,
+		"logOutput":  strings.Join(engine.GetBuffer(id).Lines(), "\n"),
+		"createdAt":  createdAt.Time,
 	})
 }
 
@@ -944,17 +978,25 @@ func (s *Server) handleRebuildCatalog(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleRecoveryPackage(w http.ResponseWriter, r *http.Request) {
 	var cfg struct {
-		Region            string
-		HotBucket         sql.NullString
-		ColdBucket        sql.NullString
-		StackName         string
-		EncRepoPassword   sql.NullString
-		EncAccessKey      sql.NullString
-		EncSecretKey      sql.NullString
+		Region               string
+		HotBucket            sql.NullString
+		ColdBucket           sql.NullString
+		StackName            string
+		EncRepoPassword      sql.NullString
+		EncAccessKey         sql.NullString
+		EncSecretKey         sql.NullString
+		AccountID            sql.NullString
+		BatchManifestsBucket sql.NullString
+		BatchReportsBucket   sql.NullString
+		BatchRoleArn         sql.NullString
+		SQSUrl               sql.NullString
 	}
 	s.DB.QueryRowContext(r.Context(),
-		`SELECT region, hot_bucket, cold_bucket, stack_name, encrypted_access_key, encrypted_secret_key FROM aws_config WHERE id=1`,
-	).Scan(&cfg.Region, &cfg.HotBucket, &cfg.ColdBucket, &cfg.StackName, &cfg.EncAccessKey, &cfg.EncSecretKey)
+		`SELECT region, hot_bucket, cold_bucket, stack_name, encrypted_access_key, encrypted_secret_key,
+		        account_id, batch_manifests_bucket, batch_reports_bucket, batch_role_arn, sqs_url
+		 FROM aws_config WHERE id=1`,
+	).Scan(&cfg.Region, &cfg.HotBucket, &cfg.ColdBucket, &cfg.StackName, &cfg.EncAccessKey, &cfg.EncSecretKey,
+		&cfg.AccountID, &cfg.BatchManifestsBucket, &cfg.BatchReportsBucket, &cfg.BatchRoleArn, &cfg.SQSUrl)
 	s.DB.QueryRowContext(r.Context(),
 		`SELECT encrypted_repo_password FROM app_config WHERE id=1`,
 	).Scan(&cfg.EncRepoPassword)
@@ -976,6 +1018,22 @@ func (s *Server) handleRecoveryPackage(w http.ResponseWriter, r *http.Request) {
 		IAMSecretKey:   iamSecret,
 	}))
 	writeZipFile(zw, "repo.password", repoPass)
+	writeZipFile(zw, "warmup-s3-archives-config.toml", fmt.Sprintf(`# GlacierVault warmup tool config. Place in the working directory
+# from which you run the restore command below.
+[aws_resources]
+account_id = %q
+cold_bucket_name = %q
+batch_manifests_bucket_name = %q
+batch_reports_bucket_name = %q
+batch_role_arn = %q
+restore_queue_url = %q
+
+[initiate_restore_object]
+expiration_in_days = 7
+glacier_job_tier = "BULK"
+`,
+		cfg.AccountID.String, cfg.ColdBucket.String, cfg.BatchManifestsBucket.String,
+		cfg.BatchReportsBucket.String, cfg.BatchRoleArn.String, cfg.SQSUrl.String))
 
 	zw.Close()
 
@@ -1034,24 +1092,36 @@ Repository Password: %s
 To recover data without GlacierVault:
 
 1. Install Rustic: https://rustic.cli.rs
-2. Install warmup-s3-archives: https://github.com/rustic-rs/rustic-aws
-3. Edit rustic.toml from this package with correct credentials (already included)
-4. Run: rustic -P ./rustic snapshots
-5. Initiate warmup for the packs you need:
-     warmup-s3-archives restore <snapshot-id>
-6. Wait for Glacier Deep Archive retrieval (~12-48 hours)
-7. Run: rustic -P ./rustic restore <snapshot-id> --target /destination
+2. Install warmup-s3-archives: https://gitlab.com/philipmw/warmup-s3-archives
+3. Unzip this package and cd into its directory. It contains:
+     rustic.toml                       (repository config, credentials included)
+     repo.password                     (repository password)
+     warmup-s3-archives-config.toml    (Glacier warmup tool config)
+4. Export your AWS credentials (same values as in rustic.toml):
+     export AWS_ACCESS_KEY_ID=...
+     export AWS_SECRET_ACCESS_KEY=...
+     export AWS_REGION=%s
+5. List snapshots to find the one you want:
+     rustic -P ./rustic snapshots
+6. Restore (destination is positional). Rustic computes the exact pack set
+   the snapshot needs and calls warmup-s3-archives with those S3 keys
+   (%%paths); the tool submits an S3 Batch restore at the cheapest BULK
+   tier and waits for Glacier to finish, then rustic downloads:
+     rustic -P ./rustic restore <snapshot-id> /destination \
+       --warm-up-command "warmup-s3-archives %%paths" --warm-up-batch 1000
+   Bulk retrieval from Deep Archive can take up to ~48 hours; the command
+   blocks until the packs are available and then restores automatically.
 
 IMPORTANT: Keep this package secure. It contains credentials to your backup storage.
-`, region, hotBucket, coldBucket, repoPassword)
+`, region, hotBucket, coldBucket, repoPassword, region)
 }
 
 type rusticConfigParams struct {
-	HotBucket       string
-	ColdBucket      string
-	Region          string
-	IAMAccessKeyID  string
-	IAMSecretKey    string
+	HotBucket      string
+	ColdBucket     string
+	Region         string
+	IAMAccessKeyID string
+	IAMSecretKey   string
 }
 
 func buildRusticConfigTemplate(p rusticConfigParams) string {

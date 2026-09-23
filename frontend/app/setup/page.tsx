@@ -94,6 +94,7 @@ export default function SetupPage() {
                 <p>• {estimate.s3Buckets} S3 buckets (incl. Glacier Deep Archive)</p>
                 <p>• {estimate.sqsQueues} SQS queue</p>
                 <p>• {estimate.iamUsers} IAM user + {estimate.iamRoles} IAM role</p>
+                <p>• {estimate.cloudfrontDists} CloudFront distribution (free-egress restores)</p>
                 <p className="text-gray-500 text-xs mt-2">{estimate.details}</p>
               </div>
             )}
