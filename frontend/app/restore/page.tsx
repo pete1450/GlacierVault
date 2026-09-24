@@ -162,7 +162,7 @@ export default function RestorePage() {
                 <div className="grid grid-cols-2 gap-4 sm:grid-cols-3">
                   {[
                     { label: 'Destination', value: detail.destination, mono: true },
-                    { label: 'Snapshot', value: `#${detail.snapshotId}` },
+                    { label: 'Snapshot', value: detail.snapshotId != null ? `#${detail.snapshotId}` : 'deleted' },
                     { label: 'Retrieval started', value: detail.retrievalStartedAt ? new Date(detail.retrievalStartedAt).toLocaleString() : '—' },
                     { label: 'Restore started', value: detail.restoreStartedAt ? new Date(detail.restoreStartedAt).toLocaleString() : '—' },
                     { label: 'Completed', value: detail.completedAt ? new Date(detail.completedAt).toLocaleString() : '—' },

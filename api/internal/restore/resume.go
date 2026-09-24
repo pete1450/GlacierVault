@@ -283,7 +283,7 @@ func (m *Manager) resumeAfterRestart(ctx context.Context, jobID int64, batchJobI
 // already thawed: plain rustic restore with no warm-up step, through the
 // CloudFront proxy profile when enabled.
 func (m *Manager) downloadAfterWarmup(ctx context.Context, jobID int64, buf *engine.RingBuffer) {
-	var snapshotRowID int64
+	var snapshotRowID sql.NullInt64
 	var pathsJSON, destination string
 	err := m.db.QueryRowContext(ctx,
 		`SELECT snapshot_id, requested_paths, destination FROM restore_jobs WHERE id=?`, jobID,
@@ -292,9 +292,13 @@ func (m *Manager) downloadAfterWarmup(ctx context.Context, jobID int64, buf *eng
 		m.setStatus(ctx, jobID, StatusFailed, fmt.Sprintf("resume: load job: %v", err))
 		return
 	}
+	if !snapshotRowID.Valid {
+		m.setStatus(ctx, jobID, StatusFailed, "resume: snapshot was deleted; cannot download")
+		return
+	}
 	var rusticID string
 	if err := m.db.QueryRowContext(ctx,
-		`SELECT snapshot_id FROM snapshots WHERE id=?`, snapshotRowID).Scan(&rusticID); err != nil {
+		`SELECT snapshot_id FROM snapshots WHERE id=?`, snapshotRowID.Int64).Scan(&rusticID); err != nil {
 		m.setStatus(ctx, jobID, StatusFailed, fmt.Sprintf("resume: lookup snapshot: %v", err))
 		return
 	}
