@@ -1,13 +1,20 @@
 package cloudfront
 
 import (
+	"bytes"
 	"crypto/rsa"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
+
+	"github.com/aws/aws-sdk-go-v2/aws"
+	v4 "github.com/aws/aws-sdk-go-v2/aws/signer/v4"
 )
 
 // DefaultAddr is the localhost address the S3→CloudFront proxy listens on.
@@ -22,39 +29,55 @@ const DefaultAddr = "127.0.0.1:18923"
 const URLValidity = 2 * time.Minute
 
 // Proxy translates S3 GET/HEAD requests from rustic into CloudFront signed
-// URL fetches. It speaks just enough of the S3 REST API for restore
-// downloads: path-style GET/HEAD on object keys, with S3-style XML errors.
+// URL fetches, so pack downloads ride the free-egress path. It speaks just
+// enough of the S3 REST API for restore downloads: path-style GET/HEAD on
+// object keys, with S3-style XML errors.
+//
+// Anything the distribution cannot serve — notably ListObjectsV2, which
+// rustic needs to enumerate keys/ and snapshots/ — is passed through to
+// real S3, signed with the deployment's AWS credentials. Without that,
+// pointing rustic's cold repository at the proxy breaks repository
+// operations that list.
 type Proxy struct {
 	bucket     string // the only bucket served; everything else is denied
+	region     string
+	accessKey  string
+	secretKey  string
 	signer     *Signer
+	v4signer   *v4.Signer
 	httpClient *http.Client
 }
 
 // NewProxy builds the translating proxy. baseURL is the CloudFront
 // distribution base URL (e.g. https://d111111abcdef8.cloudfront.net);
-// privateKey is the URL signing key (kept in memory only).
-func NewProxy(baseURL, bucket, keyPairID string, privateKey *rsa.PrivateKey) *Proxy {
-	return newProxyWithClient(baseURL, bucket, keyPairID, privateKey, http.DefaultClient)
+// privateKey is the URL signing key (kept in memory only). region,
+// accessKey and secretKey are the deployment's AWS credentials, used only
+// to sign pass-through requests to real S3 (e.g. ListObjectsV2).
+func NewProxy(baseURL, bucket, keyPairID string, privateKey *rsa.PrivateKey, region, accessKey, secretKey string) *Proxy {
+	return newProxyWithClient(baseURL, bucket, keyPairID, privateKey, region, accessKey, secretKey, http.DefaultClient)
 }
 
-func newProxyWithClient(baseURL, bucket, keyPairID string, privateKey *rsa.PrivateKey, client *http.Client) *Proxy {
+func newProxyWithClient(baseURL, bucket, keyPairID string, privateKey *rsa.PrivateKey, region, accessKey, secretKey string, client *http.Client) *Proxy {
 	return &Proxy{
 		bucket:     bucket,
+		region:     region,
+		accessKey:  accessKey,
+		secretKey:  secretKey,
 		signer:     NewSigner(baseURL, keyPairID, privateKey),
+		v4signer:   v4.NewSigner(),
 		httpClient: client,
 	}
 }
 
-// ServeHTTP implements the minimal S3 REST surface rustic needs for restore
-// downloads: GET and HEAD on /<bucket>/<key> (path style). Virtual-hosted
-// style (<bucket>.<host>/<key>) is accepted as a fallback.
+// ServeHTTP implements the S3 REST surface rustic needs for restores.
+// GET/HEAD on /<bucket>/<key> (path style) are served via signed CloudFront
+// URLs — the free-egress path. Everything else for the bucket (notably
+// ListObjectsV2, which has no key) is passed through to real S3, signed
+// with SigV4. Virtual-hosted style (<bucket>.<host>/<key>) is accepted as
+// a fallback.
 func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet && r.Method != http.MethodHead {
-		writeS3Error(w, http.StatusMethodNotAllowed, "MethodNotAllowed", "only GET and HEAD are supported")
-		return
-	}
 	bucket, key := splitBucketKey(r)
-	if bucket == "" || key == "" {
+	if bucket == "" {
 		writeS3Error(w, http.StatusBadRequest, "InvalidRequest", "missing bucket or key")
 		return
 	}
@@ -62,7 +85,14 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeS3Error(w, http.StatusForbidden, "AccessDenied", "bucket not served by this proxy")
 		return
 	}
+	if key != "" && (r.Method == http.MethodGet || r.Method == http.MethodHead) {
+		p.serveViaCloudFront(w, r, key)
+		return
+	}
+	p.serveS3Passthrough(w, r, bucket, key)
+}
 
+func (p *Proxy) serveViaCloudFront(w http.ResponseWriter, r *http.Request, key string) {
 	signed, err := p.signer.SignURL(key, time.Now().Add(URLValidity))
 	if err != nil {
 		writeS3Error(w, http.StatusInternalServerError, "InternalError", "could not sign URL")
@@ -97,6 +127,78 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeS3Error(w, http.StatusInternalServerError, "InternalError", "upstream error")
 	default:
 		writeS3Error(w, resp.StatusCode, "InternalError", "unexpected upstream status")
+	}
+}
+
+// serveS3Passthrough forwards requests the distribution cannot serve —
+// notably ListObjectsV2 (GET /<bucket>?list-type=2&prefix=...) — to real S3,
+// signed with SigV4 using the deployment's credentials. The incoming
+// request arrives signed for the proxy endpoint, so its Authorization is
+// stripped and the request is re-signed for S3.
+func (p *Proxy) serveS3Passthrough(w http.ResponseWriter, r *http.Request, bucket, key string) {
+	if p.region == "" || p.accessKey == "" || p.secretKey == "" {
+		writeS3Error(w, http.StatusInternalServerError, "InternalError", "S3 passthrough not configured")
+		return
+	}
+
+	upath := "/" + bucket
+	if key != "" {
+		upath += "/" + key
+	}
+	target := &url.URL{
+		Scheme:   "https",
+		Host:     "s3." + p.region + ".amazonaws.com",
+		Path:     upath,
+		RawQuery: r.URL.RawQuery,
+	}
+
+	var bodyBytes []byte
+	if r.Body != nil {
+		var err error
+		if bodyBytes, err = io.ReadAll(r.Body); err != nil {
+			writeS3Error(w, http.StatusBadRequest, "InvalidRequest", "could not read request body")
+			return
+		}
+	}
+	sum := sha256.Sum256(bodyBytes)
+	payloadHash := hex.EncodeToString(sum[:])
+
+	upstream, err := http.NewRequestWithContext(r.Context(), r.Method, target.String(), bytes.NewReader(bodyBytes))
+	if err != nil {
+		writeS3Error(w, http.StatusInternalServerError, "InternalError", "could not build upstream request")
+		return
+	}
+	upstream.ContentLength = int64(len(bodyBytes))
+	for h, vals := range r.Header {
+		switch http.CanonicalHeaderKey(h) {
+		case "Authorization", "X-Amz-Date", "X-Amz-Content-Sha256", "X-Amz-Security-Token",
+			"Connection", "Keep-Alive", "Proxy-Authenticate", "Proxy-Authorization",
+			"Te", "Trailer", "Transfer-Encoding", "Upgrade":
+			continue
+		}
+		for _, v := range vals {
+			upstream.Header.Add(h, v)
+		}
+	}
+
+	creds := aws.Credentials{AccessKeyID: p.accessKey, SecretAccessKey: p.secretKey}
+	upstream.Header.Set("X-Amz-Content-Sha256", payloadHash)
+	if err := p.v4signer.SignHTTP(r.Context(), creds, upstream, payloadHash, "s3", p.region, time.Now()); err != nil {
+		writeS3Error(w, http.StatusInternalServerError, "InternalError", "could not sign upstream request")
+		return
+	}
+
+	resp, err := p.httpClient.Do(upstream)
+	if err != nil {
+		writeS3Error(w, http.StatusBadGateway, "InternalError", "upstream S3 request failed: "+err.Error())
+		return
+	}
+	defer resp.Body.Close()
+
+	copyResponseHeaders(w, resp)
+	w.WriteHeader(resp.StatusCode)
+	if r.Method != http.MethodHead {
+		_, _ = io.Copy(w, resp.Body)
 	}
 }
 

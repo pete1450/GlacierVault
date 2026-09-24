@@ -10,6 +10,8 @@ import (
 	"os"
 	"sync"
 	"time"
+
+	appCrypto "github.com/glaciervault/api/internal/crypto"
 )
 
 // Manager owns the localhost S3→CloudFront proxy's lifecycle. The proxy is
@@ -77,16 +79,27 @@ func (m *Manager) Reload() error {
 	}
 
 	// Cold bucket is needed so the proxy only serves that bucket's keys.
-	var coldBucket string
-	if err := m.db.QueryRow(`SELECT cold_bucket FROM aws_config WHERE id=1`).Scan(&coldBucket); err != nil {
-		return fmt.Errorf("load cold bucket: %w", err)
+	// Region and credentials let the proxy pass requests it can't serve
+	// via CloudFront (e.g. ListObjectsV2) through to real S3, signed
+	// with SigV4.
+	var coldBucket, region, encKey, encSecret string
+	if err := m.db.QueryRow(`SELECT cold_bucket, region, encrypted_access_key, encrypted_secret_key FROM aws_config WHERE id=1`).Scan(&coldBucket, &region, &encKey, &encSecret); err != nil {
+		return fmt.Errorf("load aws config: %w", err)
 	}
 	if coldBucket == "" {
 		return fmt.Errorf("no cold bucket configured")
 	}
+	accessKey, err := appCrypto.Decrypt(encKey)
+	if err != nil {
+		return fmt.Errorf("decrypt access key: %w", err)
+	}
+	secretKey, err := appCrypto.Decrypt(encSecret)
+	if err != nil {
+		return fmt.Errorf("decrypt secret key: %w", err)
+	}
 
 	m.stopLocked()
-	proxy := NewProxy(cfg.BaseURL(), coldBucket, cfg.KeyPairID, priv)
+	proxy := NewProxy(cfg.BaseURL(), coldBucket, cfg.KeyPairID, priv, region, accessKey, secretKey)
 	srv := &http.Server{
 		Addr:              m.addr,
 		Handler:           proxy,
