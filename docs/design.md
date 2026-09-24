@@ -116,7 +116,7 @@ silent sync failure once caused snapshots to never appear in the UI.
 | Next.js UI (`frontend/`) | Static frontend served by the Go server |
 | Rustic 0.11.4 | Backup, snapshot, and restore engine; cold-storage repository format |
 | warmup-s3-archives 1.3.0 | Submits S3 Batch restore jobs and waits for Glacier (invoked by rustic's `--warm-up-command`) |
-| Localhost S3→CloudFront proxy (`api/internal/cloudfront`) | Translates rustic's S3 GET/HEAD into per-object signed CloudFront URLs; loopback-only |
+| Localhost S3→CloudFront proxy (`api/internal/cloudfront`) | Serves rustic's S3 GET/HEAD as per-object signed CloudFront URLs; passes through anything else (e.g. ListObjectsV2) to real S3 via SigV4; loopback-only |
 | CDK stack (`cdk/`) | Provisions the core AWS resources (S3, SQS, IAM) |
 | CloudFront provisioner (`api/internal/cloudfront`) | Creates the distribution, OAC, key group, and cache policy via the AWS SDK after the CDK deploy |
 | SQLite (`/database/glaciervault.db`) | Backup definitions, jobs, restores, snapshot catalog, encrypted credentials |
@@ -194,7 +194,10 @@ UI: pick snapshot → browse → select files (or nothing = full) → destinatio
      When the CloudFront free-egress path is enabled, the restore runs with
      a per-job rustic profile whose cold backend points at the localhost
      proxy (`endpoint = "http://127.0.0.1:18923"`); pack downloads then flow
-     through signed CloudFront URLs instead of paid S3 egress. Only the
+     through signed CloudFront URLs instead of paid S3 egress. The proxy
+     serves GET/HEAD on object keys via CloudFront and passes anything else
+     the distribution can't serve (notably ListObjectsV2 for keys/ and
+     snapshots/) through to real S3, signed with SigV4. Only the
      download phase uses the proxy — warmup, snapshots, and backups keep
      using direct S3. If the proxy is unreachable the restore fails open to
      direct S3 (it costs more, but it completes).
