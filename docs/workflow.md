@@ -131,6 +131,13 @@ Pack downloads go through the private CloudFront distribution by default
 Remember the **180-day minimum**: pruning data archived less than 180 days
 ago still bills you for the remainder. Don't churn the vault.
 
+If a delete fails with `NoSuchKey`/`NotFound` on the snapshot file, the
+snapshot is already gone from the repository (both buckets) and only the
+local catalog entry is stale — this can happen after an earlier interrupted
+delete, since rustic removes the file from both backends non-atomically and
+fails if either copy is already missing. GlacierVault detects this, drops
+the stale catalog entry, and reports success instead of an error.
+
 ## 6. Disaster recovery (without the appliance)
 
 If the container/host is gone, everything you need is in **Settings →
