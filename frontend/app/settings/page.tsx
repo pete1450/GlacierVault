@@ -5,7 +5,7 @@ import Nav from '@/components/Nav'
 import {
   changePassword, logout, rebuildCatalog, getSetupStatus, type SetupStatus,
   getCloudFrontStatus, enableCloudFront, disableCloudFront, type CloudFrontStatus,
-  grantSnapshotDeletePermission,
+  grantSnapshotDeletePermission, revokeSnapshotDeletePermission, getSnapshotDeleteStatus,
   getNotificationConfig, saveNotificationConfig, testNotification,
 } from '@/lib/api'
 
@@ -51,6 +51,7 @@ export default function SettingsPage() {  const router = useRouter()
   const [iamSecretKey, setIamSecretKey] = useState('')
   const [iamMsg, setIamMsg] = useState('')
   const [iamBusy, setIamBusy] = useState(false)
+  const [iamGranted, setIamGranted] = useState<boolean | null>(null)
 
   // Notifications (apprise)
   const [destinations, setDestinations] = useState('')
@@ -64,6 +65,7 @@ export default function SettingsPage() {  const router = useRouter()
   useEffect(() => {
     getSetupStatus().then(setStatus).catch(() => {})
     getCloudFrontStatus().then(setCf).catch(() => {})
+    getSnapshotDeleteStatus().then(s => setIamGranted(s.granted)).catch(() => {})
     getNotificationConfig().then(cfg => {
       setDestinations((cfg.destinations || []).join('\n'))
       setSwBackup(cfg.notifyBackupCompleted)
@@ -118,7 +120,23 @@ export default function SettingsPage() {  const router = useRouter()
     try {
       await grantSnapshotDeletePermission(iamAccessKey, iamSecretKey)
       setIamAccessKey(''); setIamSecretKey('')
+      setIamGranted(true)
       setIamMsg('Permission granted — snapshot deletion should work now.')
+    } catch (err: any) {
+      setIamMsg(`Error: ${err.message}`)
+    } finally {
+      setIamBusy(false)
+    }
+  }
+
+  async function handleRevokeSnapshotDelete() {
+    setIamMsg('')
+    setIamBusy(true)
+    try {
+      await revokeSnapshotDeletePermission(iamAccessKey, iamSecretKey)
+      setIamAccessKey(''); setIamSecretKey('')
+      setIamGranted(false)
+      setIamMsg('Permission revoked — snapshots are read-only (append-only) again.')
     } catch (err: any) {
       setIamMsg(`Error: ${err.message}`)
     } finally {
@@ -308,11 +326,21 @@ export default function SettingsPage() {  const router = useRouter()
           <p className="text-sm text-gray-400">
             Deleting snapshots (<code className="text-gray-300">rustic forget</code>) and pruning
             need <code className="text-gray-300">s3:DeleteObject</code> on the backup buckets, but
-            the infrastructure is append-only by design and doesn't grant it. New setups get a
-            narrow delete-only policy automatically; if snapshot deletion fails with
-            AccessDenied on an older appliance, grant it here with a temporary AWS admin
-            access key (the same kind used during setup). It is used for this request only
-            and is never stored.
+            the infrastructure is append-only by design and doesn't grant it. Granting it
+            weakens that protection (a leaked backup credential could delete archives) —
+            revoking restores it. Either way takes effect immediately.
+          </p>
+          <div className="flex items-center gap-2 text-sm">
+            <span className={`inline-block w-2.5 h-2.5 rounded-full ${iamGranted ? 'bg-green-500' : 'bg-gray-600'}`} />
+            <span>
+              {iamGranted === null ? 'Loading…' : iamGranted
+                ? 'Delete permission granted — snapshots can be deleted'
+                : 'Not granted — snapshots are read-only (append-only)'}
+            </span>
+          </div>
+          <p className="text-xs text-gray-500">
+            Uses a temporary AWS admin access key (the same kind used during setup). It is
+            used for this request only and is never stored.
           </p>
           <form onSubmit={handleGrantSnapshotDelete} className="space-y-3 max-w-sm">
             <div>
@@ -337,13 +365,23 @@ export default function SettingsPage() {  const router = useRouter()
                 autoComplete="off"
               />
             </div>
-            <button
-              type="submit"
-              disabled={iamBusy}
-              className="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-700 rounded-lg text-sm font-medium transition-colors"
-            >
-              {iamBusy ? 'Granting…' : 'Grant snapshot-delete permission'}
-            </button>
+            <div className="flex gap-2">
+              <button
+                type="submit"
+                disabled={iamBusy}
+                className="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-700 rounded-lg text-sm font-medium transition-colors"
+              >
+                {iamBusy ? 'Working…' : 'Grant delete permission'}
+              </button>
+              <button
+                type="button"
+                onClick={handleRevokeSnapshotDelete}
+                disabled={iamBusy || !iamAccessKey || !iamSecretKey}
+                className="px-4 py-2 bg-gray-700 hover:bg-gray-600 disabled:bg-gray-800 disabled:text-gray-500 rounded-lg text-sm font-medium transition-colors"
+              >
+                Revoke (append-only)
+              </button>
+            </div>
           </form>
           {iamMsg && <p className="text-sm text-gray-300">{iamMsg}</p>}
         </section>

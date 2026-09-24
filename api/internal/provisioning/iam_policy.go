@@ -3,12 +3,14 @@ package provisioning
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/iam"
+	iamtypes "github.com/aws/aws-sdk-go-v2/service/iam/types"
 )
 
 // SnapshotDeletePolicyName is the inline policy attached to the rustic IAM
@@ -62,6 +64,33 @@ func EnsureSnapshotDeletePolicy(ctx context.Context, adminAccessKey, adminSecret
 	})
 	if err != nil {
 		return fmt.Errorf("put user policy: %w", err)
+	}
+	return nil
+}
+
+// RevokeSnapshotDeletePolicy removes the snapshot-delete inline policy from
+// iamUser, restoring the upstream append-only posture. It is idempotent:
+// deleting a policy that isn't there (NoSuchEntity) counts as success.
+// Requires admin credentials (iam:DeleteUserPolicy).
+func RevokeSnapshotDeletePolicy(ctx context.Context, adminAccessKey, adminSecretKey, region, iamUser string) error {
+	cfg, err := awsconfig.LoadDefaultConfig(ctx,
+		awsconfig.WithRegion(region),
+		awsconfig.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(adminAccessKey, adminSecretKey, "")),
+	)
+	if err != nil {
+		return fmt.Errorf("load config: %w", err)
+	}
+	client := iam.NewFromConfig(cfg)
+	_, err = client.DeleteUserPolicy(ctx, &iam.DeleteUserPolicyInput{
+		UserName:   aws.String(iamUser),
+		PolicyName: aws.String(SnapshotDeletePolicyName),
+	})
+	if err != nil {
+		var nse *iamtypes.NoSuchEntityException
+		if errors.As(err, &nse) {
+			return nil
+		}
+		return fmt.Errorf("delete user policy: %w", err)
 	}
 	return nil
 }

@@ -143,7 +143,13 @@ The wizard has four steps:
 2. **Validate.** The app calls STS to confirm the identity and shows a
    resource estimate: 4 S3 buckets, 1 SQS queue, 1 IAM user, 1 IAM role,
    1 CloudFront distribution (free-egress restores). If this fails,
-   double-check the key pair and region.
+   double-check the key pair and region. This screen also has a
+   **Read-only snapshots** checkbox (unchecked by default): check it to keep
+   the infrastructure append-only — the backup user won't get
+   `s3:DeleteObject`, so snapshots can't be deleted afterward. Leave it
+   unchecked to allow snapshot deletion (recommended for most people).
+   Either choice can be changed later in **Settings → Snapshot deletion
+   permission**.
 3. **Deploy.** CDK bootstrap (first time only) + `cdk deploy`, with live
    logs streamed to the page. Takes **5–10 minutes**. Don't close the page,
    but if you do, the job record keeps the logs.

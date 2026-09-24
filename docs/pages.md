@@ -95,6 +95,12 @@ on the Bulk tier — that's Glacier working, not the app stuck. Budget up to
   provisioning request only, never stored) — needed for installs that
   predate the feature or where provisioning failed during setup. **Disable**
   to fall back to paid S3 egress.
+- **Snapshot deletion permission:** shows whether the backup user may delete
+  objects (`s3:DeleteObject` — needed for snapshot delete and prune; the
+  infrastructure is append-only by design and omits it). **Grant** or
+  **Revoke (append-only)** with a temporary AWS admin access key (used for
+  the request only, never stored). Revoking restores the append-only
+  protection at the cost of disabling snapshot deletion.
 - **Recovery:** **Download recovery package** (bucket names, region, repo
   password, manual restore instructions — store it somewhere safe) and
   **Rebuild snapshot catalog** (re-indexes snapshots from the hot repo; use
@@ -116,7 +122,10 @@ The first-run wizard (also reachable later to re-run/refresh the deployment).
 1. **Credentials** — AWS access key, secret key, region, stack name.
 2. **Validate** — confirms the identity via STS and shows the resource
    estimate (4 S3 buckets, 1 SQS queue, 1 IAM user, 1 IAM role,
-   1 CloudFront distribution).
+   1 CloudFront distribution). Also offers the **Read-only snapshots**
+   checkbox (unchecked by default): check it to keep the infrastructure
+   append-only (no snapshot deletion), leave it unchecked to allow deletion.
+   Changeable later in Settings.
 3. **Deploy** — live CDK bootstrap + deploy logs (5–10 min), then automatic
    CloudFront provisioning for free-egress restores.
 4. **Done** — confirmation; button to the dashboard.
