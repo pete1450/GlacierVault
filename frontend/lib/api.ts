@@ -113,11 +113,11 @@ export interface SetupStatus {
 }
 export interface BackupDef {
   id: number; name: string; sourcePaths: string; schedule: string
-  retentionLabel: string; compressionLevel: number; enabled: boolean; createdAt: string
+  compressionLevel: number; enabled: boolean; createdAt: string
 }
 export interface CreateBackupInput {
   name: string; sourcePaths: string[]; schedule: string
-  retentionLabel?: string; compressionLevel?: number; password: string
+  compressionLevel?: number; password: string
 }
 export interface Job {
   id: number; backupDefId: number; startedAt: string; completedAt: string | null

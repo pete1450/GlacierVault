@@ -33,13 +33,14 @@ func NormalizeCron(schedule string) string {
 
 // BackupDef is a minimal representation used by the scheduler.
 type BackupDef struct {
-	ID          int64
-	Name        string
-	SourcePaths []string
-	Tags        []string
-	Schedule    string
-	Password    string
-	Enabled     bool
+	ID               int64
+	Name             string
+	SourcePaths      []string
+	Tags             []string
+	Schedule         string
+	Password         string
+	CompressionLevel int
+	Enabled          bool
 }
 
 // Scheduler manages cron-driven backup jobs.
@@ -151,7 +152,7 @@ func (s *Scheduler) runBackup(def BackupDef) {
 	buf := engine.GetBuffer(jobID)
 	buf.Write(fmt.Sprintf("Starting backup for %q", def.Name))
 
-	runErr := s.engine.RunBackup(ctx, buf, def.SourcePaths, def.Tags)
+	runErr := s.engine.RunBackup(ctx, buf, def.SourcePaths, def.Tags, def.CompressionLevel)
 
 	status := "completed"
 	errMsg := ""
@@ -193,7 +194,7 @@ func (s *Scheduler) runBackup(def BackupDef) {
 
 func (s *Scheduler) loadDefs(ctx context.Context) ([]BackupDef, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, name, source_paths, schedule, encrypted_password, enabled FROM backup_definitions WHERE enabled = 1`,
+		`SELECT id, name, source_paths, schedule, encrypted_password, compression_level, enabled FROM backup_definitions WHERE enabled = 1`,
 	)
 	if err != nil {
 		return nil, err
@@ -205,7 +206,7 @@ func (s *Scheduler) loadDefs(ctx context.Context) ([]BackupDef, error) {
 		var d BackupDef
 		var sourcePaths string
 		var enabled int
-		if err := rows.Scan(&d.ID, &d.Name, &sourcePaths, &d.Schedule, &d.Password, &enabled); err != nil {
+		if err := rows.Scan(&d.ID, &d.Name, &sourcePaths, &d.Schedule, &d.Password, &d.CompressionLevel, &enabled); err != nil {
 			return nil, err
 		}
 		d.Enabled = enabled == 1

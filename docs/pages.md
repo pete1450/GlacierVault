@@ -17,13 +17,13 @@ snapshot count mean the appliance is doing its job.*
 ## Backup Sources (`/backups`)
 
 Where backup definitions live. Each definition is a card showing name,
-enabled/disabled state, schedule, retention label, compression level, and
+enabled/disabled state, schedule, compression level, and
 source paths, with actions:
 
 - **▶ Run now** — starts a backup immediately (creates a job you can watch
   on the Jobs page).
 - **Enable / Disable** — pauses the schedule without deleting the definition.
-- **Edit** — change name, paths, schedule, retention label, compression.
+- **Edit** — change name, paths, schedule, compression.
   (The encryption password is only asked at creation.)
 - **Delete** — removes the definition (with confirmation). Does not touch
   existing snapshots.
@@ -31,8 +31,7 @@ source paths, with actions:
 **+ New Backup** opens the creation form: name, one or more source paths
 (paths *inside the container*, e.g. `/mnt/photos` — mount host dirs read-only
 via Docker volumes), schedule presets (Daily 2 AM, Weekly Sun 2 AM, Every 6
-hours, Hourly, or custom cron), retention label (`critical` / `archive` /
-`personal`), compression slider (1–22), and the encryption password field.
+hours, Hourly, or custom cron), compression slider (1–22), and the encryption password field.
 
 ## Jobs (`/jobs`)
 

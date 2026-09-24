@@ -14,14 +14,11 @@ const NAMED_SCHEDULES = [
   { label: 'Custom cron…', value: 'custom' },
 ]
 
-const RETENTION_LABELS = ['critical', 'archive', 'personal']
-
 const DEFAULT_FORM: CreateBackupInput & { schedulePreset: string } = {
   name: '',
   sourcePaths: [],
   schedule: 'daily',
   schedulePreset: 'daily',
-  retentionLabel: 'archive',
   compressionLevel: 3,
   password: '',
 }
@@ -58,7 +55,6 @@ export default function BackupsPage() {
         sourcePaths: paths,
         schedule: backup.schedule,
         schedulePreset: preset,
-        retentionLabel: backup.retentionLabel,
         compressionLevel: backup.compressionLevel,
         password: '',
       })
@@ -293,26 +289,6 @@ export default function BackupsPage() {
                 </div>
               </Field>
 
-              {/* Retention label */}
-              <Field label="Retention Label">
-                <div className="flex gap-2">
-                  {RETENTION_LABELS.map(l => (
-                    <button
-                      key={l}
-                      type="button"
-                      onClick={() => setForm(f => ({ ...f, retentionLabel: l }))}
-                      className={`px-3 py-1.5 rounded-lg text-sm capitalize transition-colors border ${
-                        form.retentionLabel === l
-                          ? 'bg-blue-600/20 border-blue-500 text-blue-300'
-                          : 'bg-gray-800 border-gray-700 text-gray-300 hover:border-gray-500'
-                      }`}
-                    >
-                      {l}
-                    </button>
-                  ))}
-                </div>
-              </Field>
-
               {/* Compression */}
               <Field label={`Compression Level: ${form.compressionLevel}`} hint="1 = fastest, 22 = smallest">
                 <input
@@ -395,7 +371,6 @@ function BackupCard({
           </div>
           <div className="flex flex-wrap gap-x-4 gap-y-1 text-sm text-gray-400">
             <span>⏱ {backup.schedule}</span>
-            <span>🏷 {backup.retentionLabel}</span>
             <span>📦 compression {backup.compressionLevel}</span>
           </div>
         </div>
