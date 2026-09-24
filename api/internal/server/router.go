@@ -385,7 +385,7 @@ func (s *Server) handleDeploy(w http.ResponseWriter, r *http.Request) {
 		// deployment still completes and the user can enable it later from
 		// Settings with another set of temporary admin credentials.
 		buf.Write("Provisioning CloudFront free-egress distribution...")
-		cfInfo, cfKeyPEM, err := cloudfront.Ensure(ctx, cloudfront.EnsureConfig{
+		cfInfo, cfKeyPEM, err := cloudfront.EnsureReady(ctx, s.DB, cloudfront.EnsureConfig{
 			Region:     body.Region,
 			ColdBucket: outputs.ColdBucket,
 			StackName:  body.StackName,

@@ -67,7 +67,7 @@ func (s *Server) handleCloudFrontEnable(w http.ResponseWriter, r *http.Request) 
 		ctx := context.Background()
 		s.CFManager.SetProvisioning(true, "")
 
-		info, keyPEM, err := cloudfront.Ensure(ctx, cloudfront.EnsureConfig{
+		info, keyPEM, err := cloudfront.EnsureReady(ctx, s.DB, cloudfront.EnsureConfig{
 			Region:     region,
 			ColdBucket: coldBucket,
 			StackName:  stackName,
