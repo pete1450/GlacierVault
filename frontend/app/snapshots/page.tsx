@@ -72,10 +72,12 @@ export default function SnapshotsPage() {
     if (!confirmDelete) return
     setBusy(true)
     try {
-      await deleteSnapshot(confirmDelete.id, pruneOnDelete)
-      setNotice(pruneOnDelete
-        ? 'Snapshot deleted and space reclaimed.'
-        : 'Snapshot deleted. Run "Prune repository" to reclaim its space.')
+      const result = await deleteSnapshot(confirmDelete.id, pruneOnDelete)
+      setNotice(result.alreadyGone
+        ? 'Snapshot was already gone from the repository; catalog entry removed.'
+        : pruneOnDelete
+          ? 'Snapshot deleted and space reclaimed.'
+          : 'Snapshot deleted. Run "Prune repository" to reclaim its space.')
       const deletedId = confirmDelete.id
       setConfirmDelete(null)
       setPruneOnDelete(false)

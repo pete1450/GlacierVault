@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -421,16 +422,63 @@ type RepoInfo struct {
 	SnapshotCount int64 `json:"snapshotCount"`
 }
 
+// ErrSnapshotAlreadyGone is returned by ForgetSnapshot when the snapshot
+// file is no longer present in the repository (neither hot nor cold
+// backend). The desired end state — the snapshot being gone — is already
+// true, so callers should treat this as success and clean up their own
+// bookkeeping.
+var ErrSnapshotAlreadyGone = errors.New("snapshot already removed from repository")
+
 // ForgetSnapshot removes a single snapshot from the repository by rustic ID.
 // When prune is true, `forget --prune` runs the prune step automatically,
 // reclaiming space from data that is no longer referenced by any snapshot.
+//
+// rustic's hot/cold backend is not atomic across backends: forget removes the
+// snapshot file from both and fails if either copy is already missing — even
+// when it just removed the other one. If the failure is a not-found on the
+// snapshot file and a fresh listing no longer shows the snapshot, the delete
+// is effectively complete, so this returns ErrSnapshotAlreadyGone instead of
+// an error.
 func (e *Engine) ForgetSnapshot(ctx context.Context, snapshotID string, prune bool) error {
 	args := []string{"forget", snapshotID}
 	if prune {
 		args = append(args, "--prune")
 	}
 	_, err := e.run(ctx, nil, args...)
-	return err
+	if err == nil {
+		return nil
+	}
+	if !isSnapshotNotFoundErr(err) {
+		return err
+	}
+	// The snapshot file is gone from at least one backend. Confirm it is
+	// really unlistable (not just a hot/cold skew) before calling it done.
+	listed, lerr := e.ListSnapshots(ctx)
+	if lerr != nil {
+		return err // cannot verify; surface the original failure
+	}
+	for _, s := range listed {
+		if s.ID == snapshotID || strings.HasPrefix(s.ID, snapshotID) || strings.HasPrefix(snapshotID, s.ID) {
+			return err // still present — a real failure
+		}
+	}
+	return ErrSnapshotAlreadyGone
+}
+
+// isSnapshotNotFoundErr reports whether err looks like rustic failing because
+// the snapshot file does not exist (S3 NoSuchKey / local ENOENT / opendal
+// NotFound on the snapshots/ path).
+func isSnapshotNotFoundErr(err error) bool {
+	msg := err.Error()
+	if !strings.Contains(msg, "snapshots/") {
+		return false
+	}
+	for _, sig := range []string{"NoSuchKey", "No such file or directory", "NotFound"} {
+		if strings.Contains(msg, sig) {
+			return true
+		}
+	}
+	return false
 }
 
 // PruneRepo removes unreferenced data and repacks pack files.

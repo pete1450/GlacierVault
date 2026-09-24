@@ -49,7 +49,7 @@ export const getSnapshot = (id: number) => req<Snapshot>('GET', `/snapshots/${id
 export const listSnapshotFiles = (id: number, prefix?: string) =>
   req<FileEntry[]>('GET', `/snapshots/${id}/files${prefix ? `?prefix=${encodeURIComponent(prefix)}` : ''}`)
 export const deleteSnapshot = (id: number, prune = false) =>
-  req<{ deleted: boolean; pruned: boolean }>('DELETE', `/snapshots/${id}${prune ? '?prune=true' : ''}`)
+  req<{ deleted: boolean; pruned: boolean; alreadyGone?: boolean }>('DELETE', `/snapshots/${id}${prune ? '?prune=true' : ''}`)
 
 // Storage
 export const getStorage = () => req<StorageInfo>('GET', '/storage')

@@ -8,6 +8,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -892,10 +893,18 @@ func (s *Server) handleDeleteSnapshot(w http.ResponseWriter, r *http.Request) {
 	}
 
 	prune := r.URL.Query().Get("prune") == "true"
+	alreadyGone := false
 	if rusticID != "" {
 		if err := s.Engine.ForgetSnapshot(r.Context(), rusticID, prune); err != nil {
-			writeError(w, http.StatusInternalServerError, fmt.Sprintf("forget snapshot: %v", err))
-			return
+			if errors.Is(err, engine.ErrSnapshotAlreadyGone) {
+				// The snapshot file was already gone from the repository
+				// (both backends); the catalog entry is stale. Clean it up
+				// and report success.
+				alreadyGone = true
+			} else {
+				writeError(w, http.StatusInternalServerError, fmt.Sprintf("forget snapshot: %v", err))
+				return
+			}
 		}
 	}
 
@@ -917,7 +926,7 @@ func (s *Server) handleDeleteSnapshot(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]interface{}{"deleted": true, "pruned": prune})
+	writeJSON(w, http.StatusOK, map[string]interface{}{"deleted": true, "pruned": prune, "alreadyGone": alreadyGone})
 }
 
 // handleGetStorage reports repository storage usage from `rustic repoinfo`
