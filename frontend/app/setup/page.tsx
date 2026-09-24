@@ -96,6 +96,10 @@ export default function SetupPage() {
                 <p>• {estimate.iamUsers} IAM user + {estimate.iamRoles} IAM role</p>
                 <p>• {estimate.cloudfrontDists} CloudFront distribution (free-egress restores)</p>
                 <p className="text-gray-500 text-xs mt-2">{estimate.details}</p>
+                <p className="text-gray-500 text-xs">
+                  The CloudFront distribution is provisioned automatically as part of this
+                  deployment using the credentials above — no extra keys needed.
+                </p>
               </div>
             )}
             <button onClick={handleDeploy} className="w-full py-2 bg-green-600 hover:bg-green-700 rounded-lg font-medium transition-colors">

@@ -581,7 +581,31 @@ func (s *Server) handleUpdateBackup(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleDeleteBackup(w http.ResponseWriter, r *http.Request) {
 	id, _ := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
-	s.DB.ExecContext(r.Context(), `DELETE FROM backup_definitions WHERE id=?`, id)
+	// backup_jobs and snapshots reference backup_definitions with a
+	// RESTRICT-style foreign key, so detach them first: history and repo
+	// data stay intact, only the definition is removed.
+	tx, err := s.DB.BeginTx(r.Context(), nil)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not start transaction")
+		return
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(r.Context(), `UPDATE backup_jobs SET backup_def_id=NULL WHERE backup_def_id=?`, id); err != nil {
+		writeError(w, http.StatusInternalServerError, "could not detach backup jobs")
+		return
+	}
+	if _, err := tx.ExecContext(r.Context(), `UPDATE snapshots SET backup_def_id=NULL WHERE backup_def_id=?`, id); err != nil {
+		writeError(w, http.StatusInternalServerError, "could not detach snapshots")
+		return
+	}
+	if _, err := tx.ExecContext(r.Context(), `DELETE FROM backup_definitions WHERE id=?`, id); err != nil {
+		writeError(w, http.StatusInternalServerError, "could not delete backup")
+		return
+	}
+	if err := tx.Commit(); err != nil {
+		writeError(w, http.StatusInternalServerError, "could not delete backup")
+		return
+	}
 	go s.Scheduler.Reload(context.Background())
 	w.WriteHeader(http.StatusNoContent)
 }
