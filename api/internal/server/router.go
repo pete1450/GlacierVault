@@ -102,6 +102,11 @@ func (s *Server) Router() http.Handler {
 		r.Post("/api/settings/cloudfront/enable", s.handleCloudFrontEnable)
 		r.Post("/api/settings/cloudfront/disable", s.handleCloudFrontDisable)
 
+		// IAM permission repair (snapshot delete).
+		r.Post("/api/settings/iam/snapshot-delete", s.handleGrantSnapshotDelete)
+		r.Post("/api/settings/iam/snapshot-delete/revoke", s.handleRevokeSnapshotDelete)
+		r.Get("/api/settings/iam/snapshot-delete", s.handleSnapshotDeleteStatus)
+
 		// Notifications (apprise).
 		r.Get("/api/notifications/config", s.handleGetNotificationConfig)
 		r.Put("/api/notifications/config", s.handleSaveNotificationConfig)
@@ -260,10 +265,11 @@ func (s *Server) handleValidateCredentials(w http.ResponseWriter, r *http.Reques
 
 func (s *Server) handleDeploy(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		AccessKey string `json:"accessKey"`
-		SecretKey string `json:"secretKey"`
-		Region    string `json:"region"`
-		StackName string `json:"stackName"`
+		AccessKey         string `json:"accessKey"`
+		SecretKey         string `json:"secretKey"`
+		Region            string `json:"region"`
+		StackName         string `json:"stackName"`
+		ReadonlySnapshots bool   `json:"readonlySnapshots"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request")
@@ -339,6 +345,27 @@ func (s *Server) handleDeploy(w http.ResponseWriter, r *http.Request) {
 		encAK, _ := appCrypto.Encrypt(accessKey)
 		encSK, _ := appCrypto.Encrypt(secretKey)
 		s.DB.ExecContext(ctx, `UPDATE aws_config SET encrypted_access_key=?, encrypted_secret_key=? WHERE id=1`, encAK, encSK)
+
+		// Grant the rustic user s3:DeleteObject on the buckets so snapshot
+		// delete/prune works — unless the user chose read-only snapshots,
+		// which keeps the upstream append-only posture. The upstream CDK
+		// stack is append-only by design and omits it. Non-fatal: it can be
+		// granted or revoked later from Settings with another set of
+		// temporary admin credentials.
+		if body.ReadonlySnapshots {
+			buf.Write("Read-only snapshots selected — keeping append-only protection (snapshot delete will fail with AccessDenied).")
+			s.DB.ExecContext(ctx, `UPDATE aws_config SET snapshot_delete_granted=0 WHERE id=1`)
+		} else {
+			buf.Write("Granting snapshot-delete permission to the backup user...")
+			if err := provisioning.EnsureSnapshotDeletePolicy(ctx, body.AccessKey, body.SecretKey, body.Region, outputs.IAMUser, outputs.ColdBucket, outputs.HotBucket); err != nil {
+				buf.Write("[warn] Could not grant snapshot-delete permission: " + err.Error())
+				buf.Write("[warn] Snapshot deletion will fail until you grant it in Settings.")
+				s.DB.ExecContext(ctx, `UPDATE aws_config SET snapshot_delete_granted=0 WHERE id=1`)
+			} else {
+				buf.Write("Snapshot-delete permission granted.")
+				s.DB.ExecContext(ctx, `UPDATE aws_config SET snapshot_delete_granted=1 WHERE id=1`)
+			}
+		}
 
 		// Wait for IAM access key to propagate before using it.
 		buf.Write("Waiting for IAM credentials to propagate...")

@@ -118,6 +118,16 @@ Pack downloads go through the private CloudFront distribution by default
   retrieval charges — the confirmation dialog says so, believe it.
 - There's a combined **"delete + prune now"** checkbox in the delete dialog.
 
+> Deletion needs `s3:DeleteObject` on the backup buckets, which the upstream
+> infrastructure deliberately omits (append-only mode protects your archives
+> if the backup credentials leak). GlacierVault grants the backup user a
+> narrow delete-only policy automatically at setup — consciously trading some
+> of that protection for a working delete feature. Prefer maximum protection?
+> Check **Read-only snapshots** during setup to skip the grant. Either way,
+> you can grant or revoke it later in **Settings → Snapshot deletion
+> permission** with a temporary AWS admin key. If deletion fails with
+> AccessDenied, that's the first place to look.
+
 Remember the **180-day minimum**: pruning data archived less than 180 days
 ago still bills you for the remainder. Don't churn the vault.
 

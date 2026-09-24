@@ -28,8 +28,8 @@ export const changePassword = (currentPassword: string, newPassword: string) =>
 // Setup
 export const validateCredentials = (accessKey: string, secretKey: string, region: string) =>
   req('POST', '/setup/validate', { accessKey, secretKey, region })
-export const deployInfrastructure = (accessKey: string, secretKey: string, region: string, stackName?: string) =>
-  req<{ jobId: number }>('POST', '/setup/deploy', { accessKey, secretKey, region, stackName })
+export const deployInfrastructure = (accessKey: string, secretKey: string, region: string, stackName?: string, readonlySnapshots?: boolean) =>
+  req<{ jobId: number }>('POST', '/setup/deploy', { accessKey, secretKey, region, stackName, readonlySnapshots })
 export const getSetupStatus = () => req<SetupStatus>('GET', '/setup/status')
 
 // Backups
@@ -78,6 +78,15 @@ export const getCloudFrontStatus = () => req<CloudFrontStatus>('GET', '/settings
 export const enableCloudFront = (accessKey: string, secretKey: string) =>
   req<{ status: string }>('POST', '/settings/cloudfront/enable', { accessKey, secretKey })
 export const disableCloudFront = () => req<{ status: string }>('POST', '/settings/cloudfront/disable')
+
+// IAM permission repair: grant the backup user s3:DeleteObject so snapshot
+// delete/prune works (the CDK stack is append-only by design and omits it).
+export const grantSnapshotDeletePermission = (accessKey: string, secretKey: string) =>
+  req<{ status: string }>('POST', '/settings/iam/snapshot-delete', { accessKey, secretKey })
+export const revokeSnapshotDeletePermission = (accessKey: string, secretKey: string) =>
+  req<{ status: string }>('POST', '/settings/iam/snapshot-delete/revoke', { accessKey, secretKey })
+export const getSnapshotDeleteStatus = () =>
+  req<{ granted: boolean }>('GET', '/settings/iam/snapshot-delete')
 
 // Notifications (apprise)
 export interface NotificationConfig {

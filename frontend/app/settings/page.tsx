@@ -5,6 +5,7 @@ import Nav from '@/components/Nav'
 import {
   changePassword, logout, rebuildCatalog, getSetupStatus, type SetupStatus,
   getCloudFrontStatus, enableCloudFront, disableCloudFront, type CloudFrontStatus,
+  grantSnapshotDeletePermission, revokeSnapshotDeletePermission, getSnapshotDeleteStatus,
   getNotificationConfig, saveNotificationConfig, testNotification,
 } from '@/lib/api'
 
@@ -45,6 +46,13 @@ export default function SettingsPage() {  const router = useRouter()
   const [cfMsg, setCfMsg] = useState('')
   const [cfBusy, setCfBusy] = useState(false)
 
+  // Snapshot-delete IAM permission repair
+  const [iamAccessKey, setIamAccessKey] = useState('')
+  const [iamSecretKey, setIamSecretKey] = useState('')
+  const [iamMsg, setIamMsg] = useState('')
+  const [iamBusy, setIamBusy] = useState(false)
+  const [iamGranted, setIamGranted] = useState<boolean | null>(null)
+
   // Notifications (apprise)
   const [destinations, setDestinations] = useState('')
   const [swBackup, setSwBackup] = useState(false)
@@ -57,6 +65,7 @@ export default function SettingsPage() {  const router = useRouter()
   useEffect(() => {
     getSetupStatus().then(setStatus).catch(() => {})
     getCloudFrontStatus().then(setCf).catch(() => {})
+    getSnapshotDeleteStatus().then(s => setIamGranted(s.granted)).catch(() => {})
     getNotificationConfig().then(cfg => {
       setDestinations((cfg.destinations || []).join('\n'))
       setSwBackup(cfg.notifyBackupCompleted)
@@ -101,6 +110,37 @@ export default function SettingsPage() {  const router = useRouter()
       await refreshCf()
     } catch (err: any) {
       setCfMsg(`Error: ${err.message}`)
+    }
+  }
+
+  async function handleGrantSnapshotDelete(e: React.FormEvent) {
+    e.preventDefault()
+    setIamMsg('')
+    setIamBusy(true)
+    try {
+      await grantSnapshotDeletePermission(iamAccessKey, iamSecretKey)
+      setIamAccessKey(''); setIamSecretKey('')
+      setIamGranted(true)
+      setIamMsg('Permission granted — snapshot deletion should work now.')
+    } catch (err: any) {
+      setIamMsg(`Error: ${err.message}`)
+    } finally {
+      setIamBusy(false)
+    }
+  }
+
+  async function handleRevokeSnapshotDelete() {
+    setIamMsg('')
+    setIamBusy(true)
+    try {
+      await revokeSnapshotDeletePermission(iamAccessKey, iamSecretKey)
+      setIamAccessKey(''); setIamSecretKey('')
+      setIamGranted(false)
+      setIamMsg('Permission revoked — snapshots are read-only (append-only) again.')
+    } catch (err: any) {
+      setIamMsg(`Error: ${err.message}`)
+    } finally {
+      setIamBusy(false)
     }
   }
 
@@ -278,6 +318,72 @@ export default function SettingsPage() {  const router = useRouter()
             </button>
           )}
           {cfMsg && <p className="text-sm text-gray-300">{cfMsg}</p>}
+        </section>
+
+        {/* Snapshot deletion permission */}
+        <section className="bg-gray-900 rounded-xl p-6 space-y-4">
+          <h2 className="font-semibold text-lg">Snapshot deletion permission</h2>
+          <p className="text-sm text-gray-400">
+            Deleting snapshots (<code className="text-gray-300">rustic forget</code>) and pruning
+            need <code className="text-gray-300">s3:DeleteObject</code> on the backup buckets, but
+            the infrastructure is append-only by design and doesn't grant it. Granting it
+            weakens that protection (a leaked backup credential could delete archives) —
+            revoking restores it. Either way takes effect immediately.
+          </p>
+          <div className="flex items-center gap-2 text-sm">
+            <span className={`inline-block w-2.5 h-2.5 rounded-full ${iamGranted ? 'bg-green-500' : 'bg-gray-600'}`} />
+            <span>
+              {iamGranted === null ? 'Loading…' : iamGranted
+                ? 'Delete permission granted — snapshots can be deleted'
+                : 'Not granted — snapshots are read-only (append-only)'}
+            </span>
+          </div>
+          <p className="text-xs text-gray-500">
+            Uses a temporary AWS admin access key (the same kind used during setup). It is
+            used for this request only and is never stored.
+          </p>
+          <form onSubmit={handleGrantSnapshotDelete} className="space-y-3 max-w-sm">
+            <div>
+              <label className="block text-sm text-gray-300 mb-1">AWS access key ID</label>
+              <input
+                type="text"
+                value={iamAccessKey}
+                onChange={e => setIamAccessKey(e.target.value)}
+                className="w-full px-3 py-2 bg-gray-800 text-white rounded-lg border border-gray-700 focus:outline-none focus:border-blue-500 text-sm font-mono"
+                required
+                autoComplete="off"
+              />
+            </div>
+            <div>
+              <label className="block text-sm text-gray-300 mb-1">AWS secret access key</label>
+              <input
+                type="password"
+                value={iamSecretKey}
+                onChange={e => setIamSecretKey(e.target.value)}
+                className="w-full px-3 py-2 bg-gray-800 text-white rounded-lg border border-gray-700 focus:outline-none focus:border-blue-500 text-sm font-mono"
+                required
+                autoComplete="off"
+              />
+            </div>
+            <div className="flex gap-2">
+              <button
+                type="submit"
+                disabled={iamBusy}
+                className="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-700 rounded-lg text-sm font-medium transition-colors"
+              >
+                {iamBusy ? 'Working…' : 'Grant delete permission'}
+              </button>
+              <button
+                type="button"
+                onClick={handleRevokeSnapshotDelete}
+                disabled={iamBusy || !iamAccessKey || !iamSecretKey}
+                className="px-4 py-2 bg-gray-700 hover:bg-gray-600 disabled:bg-gray-800 disabled:text-gray-500 rounded-lg text-sm font-medium transition-colors"
+              >
+                Revoke (append-only)
+              </button>
+            </div>
+          </form>
+          {iamMsg && <p className="text-sm text-gray-300">{iamMsg}</p>}
         </section>
 
         {/* Notifications */}

@@ -15,6 +15,7 @@ export default function SetupPage() {
   const [jobId, setJobId] = useState<number | null>(null)
   const [logs, setLogs] = useState<string[]>([])
   const [error, setError] = useState('')
+  const [readonlySnapshots, setReadonlySnapshots] = useState(false)
   const router = useRouter()
 
   async function handleValidate(e: React.FormEvent) {
@@ -34,7 +35,7 @@ export default function SetupPage() {
     setError('')
     setStep('deploy')
     try {
-      const result = await deployInfrastructure(creds.accessKey, creds.secretKey, creds.region, creds.stackName)
+      const result = await deployInfrastructure(creds.accessKey, creds.secretKey, creds.region, creds.stackName, readonlySnapshots)
       setJobId(result.jobId)
       streamLogs(result.jobId)
     } catch (err: any) {
@@ -102,6 +103,23 @@ export default function SetupPage() {
                 </p>
               </div>
             )}
+            <label className="flex items-start gap-3 cursor-pointer bg-gray-800 rounded-lg px-3 py-2">
+              <input
+                type="checkbox"
+                checked={readonlySnapshots}
+                onChange={e => setReadonlySnapshots(e.target.checked)}
+                className="mt-1 accent-blue-600"
+              />
+              <span className="text-sm">
+                <span className="text-gray-200 font-medium">Read-only snapshots</span>
+                <span className="block text-gray-500 text-xs mt-0.5">
+                  Keeps the infrastructure append-only: the backup user is not granted
+                  permission to delete objects, so snapshots can't be deleted afterward
+                  (protects against leaked credentials). Leave unchecked to allow snapshot
+                  deletion — you can change this later in Settings.
+                </span>
+              </span>
+            </label>
             <button onClick={handleDeploy} className="w-full py-2 bg-green-600 hover:bg-green-700 rounded-lg font-medium transition-colors">
               Deploy Infrastructure →
             </button>
