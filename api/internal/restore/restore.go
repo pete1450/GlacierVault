@@ -28,8 +28,8 @@ const glacierJobTier = "BULK"
 
 // restoredCopyDays is how long the temporarily restored S3 Standard copy of
 // each pack is kept. The download starts immediately after the warmup phase,
-// so a small window is enough.
-const restoredCopyDays = 2
+// so a small window is enough. 1 is the minimum AWS allows.
+const restoredCopyDays = 1
 
 // Status values for restore_jobs.
 const (

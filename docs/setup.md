@@ -40,7 +40,9 @@ In the AWS Console:
            "sqs:*",
            "cloudfront:*",
            "sts:GetCallerIdentity",
-           "ecr:*"
+           "ecr:*",
+           "ssm:PutParameter",
+           "ssm:GetParameter"
          ],
          "Resource": "*"
        }]
@@ -51,6 +53,18 @@ In the AWS Console:
      > entry covers CDK asset publishing if your bootstrap uses it; omit it
      > if your bootstrap is already in place. `cloudfront:*` is needed for
      > the free-egress distribution the app provisions after the CDK deploy.
+     > `ssm:PutParameter` / `ssm:GetParameter` are for the `/cdk-bootstrap/…`
+     > version key that `cdk bootstrap` writes — without them bootstrap fails.
+     >
+     > Be honest with yourself about what this policy means: `iam:*` lets the
+     > holder create roles and attach `AdministratorAccess` to them (CDK
+     > bootstrap itself does exactly that for its deploy role), so a
+     > determined holder of these credentials can reach full admin regardless
+     > of how you scope the rest. The scoped policy limits accidental blast
+     > radius; the real protection is using the credential once and deleting
+     > the user (or at least its access key) right after setup — see below.
+     > `Resource: "*"` is the practical minimum because CDK generates bucket,
+     > role, and policy names at deploy time.
 3. Finish user creation, then open the user → **Security credentials →
    Create access key** → use case "Command Line Interface (CLI)". Copy the
    **Access key ID** and **Secret access key** — the secret is shown once.
