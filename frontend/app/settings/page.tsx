@@ -203,6 +203,10 @@ export default function SettingsPage() {  const router = useRouter()
             allowance (1 TB/month, shared across your account) instead of paid S3 egress.
             The bucket stays private: the distribution requires signed URLs, which are
             minted inside the appliance by a localhost-only proxy and never leave it.
+            The distribution is provisioned automatically during initial setup with the
+            credentials you entered there — the manual option below is only for
+            appliances set up before this feature existed or where setup provisioning
+            was skipped.
           </p>
           {cf ? (
             <div className="text-sm space-y-2">
@@ -224,41 +228,46 @@ export default function SettingsPage() {  const router = useRouter()
             <p className="text-gray-500 text-sm">Loading…</p>
           )}
           {!cf?.enabled && !cf?.provisioning && (
-            <form onSubmit={handleCfEnable} className="space-y-3 max-w-sm">
-              <p className="text-sm text-gray-400">
-                Enable with a temporary AWS admin access key (the same kind used during
-                setup). It is used for this provisioning request only and is never stored.
-              </p>
-              <div>
-                <label className="block text-sm text-gray-300 mb-1">AWS access key ID</label>
-                <input
-                  type="text"
-                  value={cfAccessKey}
-                  onChange={e => setCfAccessKey(e.target.value)}
-                  className="w-full px-3 py-2 bg-gray-800 text-white rounded-lg border border-gray-700 focus:outline-none focus:border-blue-500 text-sm font-mono"
-                  required
-                  autoComplete="off"
-                />
-              </div>
-              <div>
-                <label className="block text-sm text-gray-300 mb-1">AWS secret access key</label>
-                <input
-                  type="password"
-                  value={cfSecretKey}
-                  onChange={e => setCfSecretKey(e.target.value)}
-                  className="w-full px-3 py-2 bg-gray-800 text-white rounded-lg border border-gray-700 focus:outline-none focus:border-blue-500 text-sm font-mono"
-                  required
-                  autoComplete="off"
-                />
-              </div>
-              <button
-                type="submit"
-                disabled={cfBusy}
-                className="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-700 rounded-lg text-sm font-medium transition-colors"
-              >
-                {cfBusy ? 'Provisioning…' : 'Enable free-egress restores'}
-              </button>
-            </form>
+            <details className="max-w-sm">
+              <summary className="text-sm text-gray-400 cursor-pointer hover:text-gray-200">
+                Manually provision (only if initial setup didn't)
+              </summary>
+              <form onSubmit={handleCfEnable} className="space-y-3 mt-3">
+                <p className="text-sm text-gray-400">
+                  Enable with a temporary AWS admin access key (the same kind used during
+                  setup). It is used for this provisioning request only and is never stored.
+                </p>
+                <div>
+                  <label className="block text-sm text-gray-300 mb-1">AWS access key ID</label>
+                  <input
+                    type="text"
+                    value={cfAccessKey}
+                    onChange={e => setCfAccessKey(e.target.value)}
+                    className="w-full px-3 py-2 bg-gray-800 text-white rounded-lg border border-gray-700 focus:outline-none focus:border-blue-500 text-sm font-mono"
+                    required
+                    autoComplete="off"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm text-gray-300 mb-1">AWS secret access key</label>
+                  <input
+                    type="password"
+                    value={cfSecretKey}
+                    onChange={e => setCfSecretKey(e.target.value)}
+                    className="w-full px-3 py-2 bg-gray-800 text-white rounded-lg border border-gray-700 focus:outline-none focus:border-blue-500 text-sm font-mono"
+                    required
+                    autoComplete="off"
+                  />
+                </div>
+                <button
+                  type="submit"
+                  disabled={cfBusy}
+                  className="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-700 rounded-lg text-sm font-medium transition-colors"
+                >
+                  {cfBusy ? 'Provisioning…' : 'Enable free-egress restores'}
+                </button>
+              </form>
+            </details>
           )}
           {cf?.enabled && !cf?.provisioning && (
             <button

@@ -38,6 +38,7 @@ export default function BackupsPage() {
   const [runningId, setRunningId] = useState<number | null>(null)
   const [runMsg, setRunMsg] = useState('')
   const [deleteConfirm, setDeleteConfirm] = useState<number | null>(null)
+  const [deleteError, setDeleteError] = useState('')
 
   useEffect(() => { refresh() }, [])
 
@@ -140,11 +141,14 @@ export default function BackupsPage() {
   }
 
   async function handleDelete(id: number) {
+    setDeleteError('')
     try {
       await deleteBackup(id)
       setDeleteConfirm(null)
       refresh()
-    } catch {}
+    } catch (err: any) {
+      setDeleteError(`Delete failed: ${err.message}`)
+    }
   }
 
   return (
@@ -165,6 +169,12 @@ export default function BackupsPage() {
         {runMsg && (
           <div className="bg-green-900/30 border border-green-700 text-green-300 text-sm px-4 py-3 rounded-lg">
             {runMsg}
+          </div>
+        )}
+
+        {deleteError && (
+          <div className="bg-red-900/30 border border-red-700 text-red-300 text-sm px-4 py-3 rounded-lg">
+            {deleteError}
           </div>
         )}
 
