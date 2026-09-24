@@ -1,6 +1,6 @@
 # GlacierVault
 
-A self-hosted backup appliance that makes cheap AWS Glacier Deep Archive as simple as possible: you bring AWS credentials, it handles the rest. One Docker container with a web UI — it deploys the AWS infrastructure with CDK, schedules encrypted [Rustic](https://github.com/rustic-rs/rustic) backups into Deep Archive, and walks restores through Glacier retrieval (with a private CloudFront distribution for free-egress downloads and Apprise notifications when jobs finish).
+A self-hosted backup appliance that makes cheap AWS Glacier Deep Archive as simple as possible: you bring AWS credentials, it handles the rest. One Docker container with a web UI — it deploys the AWS infrastructure with CDK, schedules encrypted [Rustic](https://github.com/rustic-rs/rustic) backups into Deep Archive, and walks restores through Glacier retrieval with a private CloudFront distribution for free-egress downloads and Apprise notifications when jobs finish.
 
 ## ⚠️ Work in progress
 
@@ -8,13 +8,10 @@ A self-hosted backup appliance that makes cheap AWS Glacier Deep Archive as simp
 Thought process
  - Deep archive is dirt-cheap but retrieval can be a pain
  - Bulk retrieval is cheap($2.50 per TB)
- - 100GB per month egress from AWS is free
- - PUT/GET request are the only thing that needs to be managed intelligently (still need to be optimized in this app)
+ - 1TB per month egress from AWS through Cloudfront is free
+ - PUT/GET request need to be managed intelligently 
  - Warmup process takes a while
  - Wouldn't it be nice to have this all in a single app
-
-
-The goal is to make AWS Deep Archive as simple as possible to non-AWS experts: you bring credentials, GlacierVault handles the rest.
 
 ---
 
