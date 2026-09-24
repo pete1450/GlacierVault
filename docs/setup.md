@@ -79,7 +79,8 @@ In the AWS Console:
 # docker-compose.yml
 services:
   glaciervault:
-    image: glaciervault:latest
+    # Prebuilt image from tagged releases (ghcr.io/pete1450/glaciervault).
+    image: ghcr.io/pete1450/glaciervault:latest
     ports:
       - "8080:8080"
     environment:
@@ -108,10 +109,29 @@ Notes:
   first boot — check `docker logs` and change it in Settings.
 
 ```bash
-docker compose up -d --build
+docker compose up -d
 ```
 
 Then open `http://<host>:8080`, log in, and you'll be redirected to `/setup`.
+
+### Building the image yourself
+
+Tagged releases (`v*`) are built automatically by
+[`.github/workflows/docker-publish.yml`](../.github/workflows/docker-publish.yml)
+and published to `ghcr.io/pete1450/glaciervault` (`:latest` plus the version
+tags). If you'd rather build locally:
+
+```bash
+docker build -f docker/Dockerfile -t glaciervault:latest .
+```
+
+then point the compose file at your local image:
+
+```yaml
+services:
+  glaciervault:
+    image: glaciervault:latest
+```
 
 ## 3. Run the setup wizard
 
