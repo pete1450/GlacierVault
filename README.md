@@ -2,6 +2,13 @@
 
 A self-hosted backup appliance that makes cheap AWS Glacier Deep Archive as simple as possible: you bring AWS credentials, it handles the rest. One Docker container with a web UI — it deploys the AWS infrastructure with CDK, schedules encrypted [Rustic](https://github.com/rustic-rs/rustic) backups into Deep Archive, and walks restores through Glacier retrieval (with a private CloudFront distribution for free-egress downloads and Apprise notifications when jobs finish).
 
+## Built on
+
+- [Rustic](https://github.com/rustic-rs/rustic) — the backup engine (encrypted, deduplicated repositories)
+- [glacier-cold-storage-cdk](https://github.com/rustic-rs/rustic-aws/tree/main/glacier-cold-storage-cdk) — the CDK project that provisions the S3/SQS/IAM infrastructure
+- [warmup-s3-archives](https://gitlab.com/philipmw/warmup-s3-archives) — restores archived S3 objects via Batch Operations before download
+- [Apprise](https://github.com/caronc/apprise) — notification dispatch (Discord, Slack, Telegram, email, ntfy, webhooks, …)
+
 ## ⚠️ Work in progress
 
 
