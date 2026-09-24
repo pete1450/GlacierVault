@@ -32,7 +32,9 @@ Thought process
 # docker-compose.yml
 services:
   glaciervault:
-    image: glaciervault:latest
+    # Prebuilt image from tagged releases (ghcr.io/pete1450/glaciervault).
+    # To build locally instead, see "Building the image yourself" in docs/setup.md.
+    image: ghcr.io/pete1450/glaciervault:latest
     ports:
       - "8080:8080"
     environment:
@@ -53,8 +55,11 @@ volumes:
 ```
 
 ```bash
-docker compose up -d --build
+docker compose up -d
 ```
+
+The compose file pulls the prebuilt image for the latest tagged release. To
+build the image yourself, see [docs/setup.md](docs/setup.md).
 
 3. **Open `http://localhost:8080`** and follow the setup wizard: paste your AWS key/secret/region, review the resource estimate, and hit **Deploy Infrastructure**. CDK bootstrap + deploy takes 5–10 minutes, then the app initializes the backup repositories and provisions the CloudFront free-egress path automatically.
 4. Add a backup source on the **Backups** page (name, source paths, schedule) and you're done — or press **Run now** for the first backup.
