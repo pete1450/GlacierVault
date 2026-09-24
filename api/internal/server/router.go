@@ -102,6 +102,9 @@ func (s *Server) Router() http.Handler {
 		r.Post("/api/settings/cloudfront/enable", s.handleCloudFrontEnable)
 		r.Post("/api/settings/cloudfront/disable", s.handleCloudFrontDisable)
 
+		// IAM permission repair (snapshot delete).
+		r.Post("/api/settings/iam/snapshot-delete", s.handleGrantSnapshotDelete)
+
 		// Notifications (apprise).
 		r.Get("/api/notifications/config", s.handleGetNotificationConfig)
 		r.Put("/api/notifications/config", s.handleSaveNotificationConfig)
@@ -339,6 +342,18 @@ func (s *Server) handleDeploy(w http.ResponseWriter, r *http.Request) {
 		encAK, _ := appCrypto.Encrypt(accessKey)
 		encSK, _ := appCrypto.Encrypt(secretKey)
 		s.DB.ExecContext(ctx, `UPDATE aws_config SET encrypted_access_key=?, encrypted_secret_key=? WHERE id=1`, encAK, encSK)
+
+		// Grant the rustic user s3:DeleteObject on the buckets so snapshot
+		// delete/prune works. The upstream CDK stack is append-only by
+		// design and omits it. Non-fatal: it can be granted later from
+		// Settings with another set of temporary admin credentials.
+		buf.Write("Granting snapshot-delete permission to the backup user...")
+		if err := provisioning.EnsureSnapshotDeletePolicy(ctx, body.AccessKey, body.SecretKey, body.Region, outputs.IAMUser, outputs.ColdBucket, outputs.HotBucket); err != nil {
+			buf.Write("[warn] Could not grant snapshot-delete permission: " + err.Error())
+			buf.Write("[warn] Snapshot deletion will fail until you grant it in Settings.")
+		} else {
+			buf.Write("Snapshot-delete permission granted.")
+		}
 
 		// Wait for IAM access key to propagate before using it.
 		buf.Write("Waiting for IAM credentials to propagate...")

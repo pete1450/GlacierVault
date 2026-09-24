@@ -5,6 +5,7 @@ import Nav from '@/components/Nav'
 import {
   changePassword, logout, rebuildCatalog, getSetupStatus, type SetupStatus,
   getCloudFrontStatus, enableCloudFront, disableCloudFront, type CloudFrontStatus,
+  grantSnapshotDeletePermission,
   getNotificationConfig, saveNotificationConfig, testNotification,
 } from '@/lib/api'
 
@@ -44,6 +45,12 @@ export default function SettingsPage() {  const router = useRouter()
   const [cfSecretKey, setCfSecretKey] = useState('')
   const [cfMsg, setCfMsg] = useState('')
   const [cfBusy, setCfBusy] = useState(false)
+
+  // Snapshot-delete IAM permission repair
+  const [iamAccessKey, setIamAccessKey] = useState('')
+  const [iamSecretKey, setIamSecretKey] = useState('')
+  const [iamMsg, setIamMsg] = useState('')
+  const [iamBusy, setIamBusy] = useState(false)
 
   // Notifications (apprise)
   const [destinations, setDestinations] = useState('')
@@ -101,6 +108,21 @@ export default function SettingsPage() {  const router = useRouter()
       await refreshCf()
     } catch (err: any) {
       setCfMsg(`Error: ${err.message}`)
+    }
+  }
+
+  async function handleGrantSnapshotDelete(e: React.FormEvent) {
+    e.preventDefault()
+    setIamMsg('')
+    setIamBusy(true)
+    try {
+      await grantSnapshotDeletePermission(iamAccessKey, iamSecretKey)
+      setIamAccessKey(''); setIamSecretKey('')
+      setIamMsg('Permission granted — snapshot deletion should work now.')
+    } catch (err: any) {
+      setIamMsg(`Error: ${err.message}`)
+    } finally {
+      setIamBusy(false)
     }
   }
 
@@ -278,6 +300,52 @@ export default function SettingsPage() {  const router = useRouter()
             </button>
           )}
           {cfMsg && <p className="text-sm text-gray-300">{cfMsg}</p>}
+        </section>
+
+        {/* Snapshot deletion permission */}
+        <section className="bg-gray-900 rounded-xl p-6 space-y-4">
+          <h2 className="font-semibold text-lg">Snapshot deletion permission</h2>
+          <p className="text-sm text-gray-400">
+            Deleting snapshots (<code className="text-gray-300">rustic forget</code>) and pruning
+            need <code className="text-gray-300">s3:DeleteObject</code> on the backup buckets, but
+            the infrastructure is append-only by design and doesn't grant it. New setups get a
+            narrow delete-only policy automatically; if snapshot deletion fails with
+            AccessDenied on an older appliance, grant it here with a temporary AWS admin
+            access key (the same kind used during setup). It is used for this request only
+            and is never stored.
+          </p>
+          <form onSubmit={handleGrantSnapshotDelete} className="space-y-3 max-w-sm">
+            <div>
+              <label className="block text-sm text-gray-300 mb-1">AWS access key ID</label>
+              <input
+                type="text"
+                value={iamAccessKey}
+                onChange={e => setIamAccessKey(e.target.value)}
+                className="w-full px-3 py-2 bg-gray-800 text-white rounded-lg border border-gray-700 focus:outline-none focus:border-blue-500 text-sm font-mono"
+                required
+                autoComplete="off"
+              />
+            </div>
+            <div>
+              <label className="block text-sm text-gray-300 mb-1">AWS secret access key</label>
+              <input
+                type="password"
+                value={iamSecretKey}
+                onChange={e => setIamSecretKey(e.target.value)}
+                className="w-full px-3 py-2 bg-gray-800 text-white rounded-lg border border-gray-700 focus:outline-none focus:border-blue-500 text-sm font-mono"
+                required
+                autoComplete="off"
+              />
+            </div>
+            <button
+              type="submit"
+              disabled={iamBusy}
+              className="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-700 rounded-lg text-sm font-medium transition-colors"
+            >
+              {iamBusy ? 'Granting…' : 'Grant snapshot-delete permission'}
+            </button>
+          </form>
+          {iamMsg && <p className="text-sm text-gray-300">{iamMsg}</p>}
         </section>
 
         {/* Notifications */}

@@ -79,6 +79,11 @@ export const enableCloudFront = (accessKey: string, secretKey: string) =>
   req<{ status: string }>('POST', '/settings/cloudfront/enable', { accessKey, secretKey })
 export const disableCloudFront = () => req<{ status: string }>('POST', '/settings/cloudfront/disable')
 
+// IAM permission repair: grant the backup user s3:DeleteObject so snapshot
+// delete/prune works (the CDK stack is append-only by design and omits it).
+export const grantSnapshotDeletePermission = (accessKey: string, secretKey: string) =>
+  req<{ status: string }>('POST', '/settings/iam/snapshot-delete', { accessKey, secretKey })
+
 // Notifications (apprise)
 export interface NotificationConfig {
   destinations: string[]
