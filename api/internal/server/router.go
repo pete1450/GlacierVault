@@ -993,13 +993,14 @@ func (s *Server) handleListRestores(w http.ResponseWriter, r *http.Request) {
 	defer rows.Close()
 	var jobs []map[string]interface{}
 	for rows.Next() {
-		var id, snapshotID int64
+		var id int64
+		var snapshotID sql.NullInt64
 		var destination, status string
 		var createdAt time.Time
 		var completedAt sql.NullTime
 		rows.Scan(&id, &snapshotID, &destination, &status, &createdAt, &completedAt)
 		jobs = append(jobs, map[string]interface{}{
-			"id": id, "snapshotId": snapshotID, "destination": destination,
+			"id": id, "snapshotId": nullInt64Val(snapshotID), "destination": destination,
 			"status": status, "createdAt": createdAt, "completedAt": nullTimeStr(completedAt),
 		})
 	}
@@ -1013,7 +1014,8 @@ func (s *Server) handleGetRestore(w http.ResponseWriter, r *http.Request) {
 	id, _ := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
 	row := s.DB.QueryRowContext(r.Context(),
 		`SELECT id, snapshot_id, requested_paths, destination, status, warmup_status, retrieval_started_at, restore_started_at, completed_at, error_message, created_at, batch_job_id FROM restore_jobs WHERE id=?`, id)
-	var rid, snapshotID int64
+	var rid int64
+	var snapshotID sql.NullInt64
 	var requestedPaths, destination, status string
 	var warmupStatus, errMsg, batchJobID sql.NullString
 	var retrievalStarted, restoreStarted, completedAt, createdAt sql.NullTime
@@ -1023,7 +1025,7 @@ func (s *Server) handleGetRestore(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"id": rid, "snapshotId": snapshotID, "requestedPaths": requestedPaths,
+		"id": rid, "snapshotId": nullInt64Val(snapshotID), "requestedPaths": requestedPaths,
 		"destination": destination, "status": status, "warmupStatus": warmupStatus.String,
 		"retrievalStartedAt": nullTimeStr(retrievalStarted), "restoreStartedAt": nullTimeStr(restoreStarted),
 		"completedAt": nullTimeStr(completedAt), "errorMessage": errMsg.String,
@@ -1130,6 +1132,14 @@ func nullTimeStr(t sql.NullTime) *string {
 	}
 	s := t.Time.Format(time.RFC3339)
 	return &s
+}
+
+// nullInt64Val renders a nullable integer for JSON: the value, or nil.
+func nullInt64Val(v sql.NullInt64) interface{} {
+	if !v.Valid {
+		return nil
+	}
+	return v.Int64
 }
 
 func toJSONArray(paths []string) string {

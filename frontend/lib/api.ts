@@ -133,7 +133,7 @@ export interface StorageInfo {
 }
 export interface FileEntry { path: string; size: number; mtime: string; isDir: boolean }
 export interface RestoreJob {
-  id: number; snapshotId: number; requestedPaths: string; destination: string
+  id: number; snapshotId: number | null; requestedPaths: string; destination: string
   status: string; warmupStatus: string; retrievalStartedAt: string | null
   restoreStartedAt: string | null; completedAt: string | null; errorMessage: string
   logOutput: string; createdAt: string
