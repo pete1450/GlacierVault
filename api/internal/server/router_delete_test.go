@@ -48,8 +48,8 @@ func deleteBackupRequest(t *testing.T, s *Server, id string) *httptest.ResponseR
 
 func TestHandleDeleteBackupDetachesReferences(t *testing.T) {
 	db := openMigratedDB(t)
-	if _, err := db.Exec(`INSERT INTO backup_definitions (id, name, source_paths, schedule, retention_label, compression_level, enabled, encrypted_password)
-		VALUES (1, 'docs', '["/mnt/docs"]', 'daily', 'archive', 3, 1, 'x')`); err != nil {
+	if _, err := db.Exec(`INSERT INTO backup_definitions (id, name, source_paths, schedule, compression_level, enabled, encrypted_password)
+		VALUES (1, 'docs', '["/mnt/docs"]', 'daily', 3, 1, 'x')`); err != nil {
 		t.Fatalf("insert definition: %v", err)
 	}
 	if _, err := db.Exec(`INSERT INTO backup_jobs (backup_def_id, status) VALUES (1, 'completed')`); err != nil {
@@ -92,8 +92,8 @@ func TestHandleDeleteBackupDetachesReferences(t *testing.T) {
 
 func TestHandleDeleteBackupNoReferences(t *testing.T) {
 	db := openMigratedDB(t)
-	if _, err := db.Exec(`INSERT INTO backup_definitions (id, name, source_paths, schedule, retention_label, compression_level, enabled, encrypted_password)
-		VALUES (7, 'photos', '["/mnt/photos"]', 'daily', 'archive', 3, 1, 'x')`); err != nil {
+	if _, err := db.Exec(`INSERT INTO backup_definitions (id, name, source_paths, schedule, compression_level, enabled, encrypted_password)
+		VALUES (7, 'photos', '["/mnt/photos"]', 'daily', 3, 1, 'x')`); err != nil {
 		t.Fatalf("insert definition: %v", err)
 	}
 	s := &Server{DB: db, Scheduler: scheduler.New(db, nil, nil, nil)}

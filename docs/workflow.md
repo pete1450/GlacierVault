@@ -13,8 +13,7 @@ plus a schedule.
 | Name | Label, also used as a rustic tag | e.g. "Home Photos", "VM images" |
 | Source Paths | Folders **inside the container** | `/mnt/home`, not `/home` — must match your Docker volume mounts |
 | Schedule | When it runs | Daily 2 AM / Weekly Sun 2 AM / Every 6 hours / Hourly / custom cron |
-| Retention Label | `critical`, `archive`, or `personal` | Organizational tag; pick the one that matches how much you care |
-| Compression Level | 1 (fastest) – 22 (smallest), default 3 | Photos/video are already compressed — low is fine. Text and VM images compress well — go higher. |
+| Compression Level | 1 (fastest) – 22 (smallest), default 3 | Actually applied: passed to Rustic as `--set-compression`. Photos/video are already compressed — low is fine. Text and VM images compress well — go higher. |
 | Encryption Password | Asked once, at creation | See the warning below |
 
 > ⚠️ **About the encryption password field:** the UI collects a password per

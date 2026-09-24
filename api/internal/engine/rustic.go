@@ -217,10 +217,15 @@ func (e *Engine) InitRepository(ctx context.Context, buf *RingBuffer) error {
 }
 
 // RunBackup executes rustic backup and streams output to buf.
-func (e *Engine) RunBackup(ctx context.Context, buf *RingBuffer, sourcePaths []string, tags []string) error {
+// compressionLevel is a zstd level (1-22); values outside that range are
+// ignored and rustic's default applies.
+func (e *Engine) RunBackup(ctx context.Context, buf *RingBuffer, sourcePaths []string, tags []string, compressionLevel int) error {
 	args := []string{"backup"}
 	for _, t := range tags {
 		args = append(args, "--tag", t)
+	}
+	if compressionLevel >= 1 && compressionLevel <= 22 {
+		args = append(args, "--set-compression", strconv.Itoa(compressionLevel))
 	}
 	args = append(args, sourcePaths...)
 	_, err := e.runStreaming(ctx, buf, args...)

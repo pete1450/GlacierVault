@@ -474,7 +474,7 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleListBackups(w http.ResponseWriter, r *http.Request) {
 	rows, err := s.DB.QueryContext(r.Context(),
-		`SELECT id, name, source_paths, schedule, retention_label, compression_level, enabled, created_at FROM backup_definitions ORDER BY created_at DESC`)
+		`SELECT id, name, source_paths, schedule, compression_level, enabled, created_at FROM backup_definitions ORDER BY created_at DESC`)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -484,13 +484,13 @@ func (s *Server) handleListBackups(w http.ResponseWriter, r *http.Request) {
 	var results []map[string]interface{}
 	for rows.Next() {
 		var id int64
-		var name, sourcePaths, schedule, retentionLabel string
+		var name, sourcePaths, schedule string
 		var compressionLevel, enabled int
 		var createdAt time.Time
-		rows.Scan(&id, &name, &sourcePaths, &schedule, &retentionLabel, &compressionLevel, &enabled, &createdAt)
+		rows.Scan(&id, &name, &sourcePaths, &schedule, &compressionLevel, &enabled, &createdAt)
 		results = append(results, map[string]interface{}{
 			"id": id, "name": name, "sourcePaths": sourcePaths, "schedule": schedule,
-			"retentionLabel": retentionLabel, "compressionLevel": compressionLevel,
+			"compressionLevel": compressionLevel,
 			"enabled": enabled == 1, "createdAt": createdAt,
 		})
 	}
@@ -505,16 +505,12 @@ func (s *Server) handleCreateBackup(w http.ResponseWriter, r *http.Request) {
 		Name             string   `json:"name"`
 		SourcePaths      []string `json:"sourcePaths"`
 		Schedule         string   `json:"schedule"`
-		RetentionLabel   string   `json:"retentionLabel"`
 		CompressionLevel int      `json:"compressionLevel"`
 		Password         string   `json:"password"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Name == "" || len(body.SourcePaths) == 0 {
 		writeError(w, http.StatusBadRequest, "name, sourcePaths, schedule, password required")
 		return
-	}
-	if body.RetentionLabel == "" {
-		body.RetentionLabel = "archive"
 	}
 	if body.CompressionLevel == 0 {
 		body.CompressionLevel = 3
@@ -530,9 +526,9 @@ func (s *Server) handleCreateBackup(w http.ResponseWriter, r *http.Request) {
 	cronExpr := scheduler.NormalizeCron(body.Schedule)
 
 	res, err := s.DB.ExecContext(r.Context(), `
-		INSERT INTO backup_definitions (name, source_paths, schedule, retention_label, compression_level, encrypted_password)
-		VALUES (?, ?, ?, ?, ?, ?)`,
-		body.Name, pathsJSON, cronExpr, body.RetentionLabel, body.CompressionLevel, encPass,
+		INSERT INTO backup_definitions (name, source_paths, schedule, compression_level, encrypted_password)
+		VALUES (?, ?, ?, ?, ?)`,
+		body.Name, pathsJSON, cronExpr, body.CompressionLevel, encPass,
 	)
 	if err != nil {
 		writeError(w, http.StatusConflict, err.Error())
@@ -549,17 +545,17 @@ func (s *Server) handleCreateBackup(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleGetBackup(w http.ResponseWriter, r *http.Request) {
 	id, _ := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
 	row := s.DB.QueryRowContext(r.Context(),
-		`SELECT id, name, source_paths, schedule, retention_label, compression_level, enabled, created_at FROM backup_definitions WHERE id=?`, id)
-	var name, sourcePaths, schedule, retentionLabel string
+		`SELECT id, name, source_paths, schedule, compression_level, enabled, created_at FROM backup_definitions WHERE id=?`, id)
+	var name, sourcePaths, schedule string
 	var compressionLevel, enabled int
 	var createdAt time.Time
-	if err := row.Scan(&id, &name, &sourcePaths, &schedule, &retentionLabel, &compressionLevel, &enabled, &createdAt); err != nil {
+	if err := row.Scan(&id, &name, &sourcePaths, &schedule, &compressionLevel, &enabled, &createdAt); err != nil {
 		writeError(w, http.StatusNotFound, "not found")
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"id": id, "name": name, "sourcePaths": sourcePaths, "schedule": schedule,
-		"retentionLabel": retentionLabel, "compressionLevel": compressionLevel,
+		"compressionLevel": compressionLevel,
 		"enabled": enabled == 1, "createdAt": createdAt,
 	})
 }
@@ -570,7 +566,6 @@ func (s *Server) handleUpdateBackup(w http.ResponseWriter, r *http.Request) {
 		Name             *string  `json:"name"`
 		Schedule         *string  `json:"schedule"`
 		SourcePaths      []string `json:"sourcePaths"`
-		RetentionLabel   *string  `json:"retentionLabel"`
 		CompressionLevel *int     `json:"compressionLevel"`
 		Enabled          *bool    `json:"enabled"`
 	}
@@ -589,9 +584,6 @@ func (s *Server) handleUpdateBackup(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(body.SourcePaths) > 0 {
 		s.DB.ExecContext(r.Context(), `UPDATE backup_definitions SET source_paths=?, updated_at=? WHERE id=?`, toJSONArray(body.SourcePaths), time.Now().UTC(), id)
-	}
-	if body.RetentionLabel != nil {
-		s.DB.ExecContext(r.Context(), `UPDATE backup_definitions SET retention_label=?, updated_at=? WHERE id=?`, *body.RetentionLabel, time.Now().UTC(), id)
 	}
 	if body.CompressionLevel != nil {
 		s.DB.ExecContext(r.Context(), `UPDATE backup_definitions SET compression_level=?, updated_at=? WHERE id=?`, *body.CompressionLevel, time.Now().UTC(), id)
@@ -643,9 +635,10 @@ func (s *Server) handleRunBackupNow(w http.ResponseWriter, r *http.Request) {
 
 	// Fetch definition.
 	row := s.DB.QueryRowContext(r.Context(),
-		`SELECT name, source_paths, encrypted_password FROM backup_definitions WHERE id=?`, defID)
+		`SELECT name, source_paths, encrypted_password, compression_level FROM backup_definitions WHERE id=?`, defID)
 	var name, sourcePaths, encPass string
-	if err := row.Scan(&name, &sourcePaths, &encPass); err != nil {
+	var compressionLevel int
+	if err := row.Scan(&name, &sourcePaths, &encPass, &compressionLevel); err != nil {
 		writeError(w, http.StatusNotFound, "backup not found")
 		return
 	}
@@ -661,7 +654,7 @@ func (s *Server) handleRunBackupNow(w http.ResponseWriter, r *http.Request) {
 
 	go func() {
 		ctx := context.Background()
-		err := s.Engine.RunBackup(ctx, buf, paths, []string{name})
+		err := s.Engine.RunBackup(ctx, buf, paths, []string{name}, compressionLevel)
 		status, errMsg := "completed", ""
 		if err != nil {
 			status, errMsg = "failed", err.Error()
