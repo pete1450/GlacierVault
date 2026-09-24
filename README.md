@@ -1,10 +1,27 @@
 # GlacierVault
 
-A self-hosted backup appliance that makes AWS Glacier Deep Archive as simple as possible: you bring AWS credentials, it handles the rest. One Docker container with a web UI — it deploys the AWS infrastructure with CDK, schedules encrypted [Rustic](https://github.com/rustic-rs/rustic) backups into Deep Archive, and walks restores through Glacier retrieval (with a private CloudFront distribution for free-egress downloads and Apprise notifications when jobs finish).
+A self-hosted backup appliance that makes cheap AWS Glacier Deep Archive as simple as possible: you bring AWS credentials, it handles the rest. One Docker container with a web UI — it deploys the AWS infrastructure with CDK, schedules encrypted [Rustic](https://github.com/rustic-rs/rustic) backups into Deep Archive, and walks restores through Glacier retrieval (with a private CloudFront distribution for free-egress downloads and Apprise notifications when jobs finish).
 
 ## ⚠️ Work in progress
 
-This is very much a work-in-progress repo. Effort went into a robust design, but very little of the output has been verified end to end — restores in particular are still being proven out. **Do not rely on this project for your real backups yet.** Open to PRs if anyone wants to dig in.
+
+Thought process
+ - Deep archive is dirt-cheap but retrieval can be a pain
+ - Bulk retrieval is cheap($2.50 per TB)
+ - 100GB per month egress from AWS is free
+ - PUT/GET request are the only thing that needs to be managed intelligently (still need to be optimized in this app)
+ - Warmup process takes a while
+ - Wouldn't it be nice to have this all in a single app
+
+
+The goal is to make AWS Deep Archive as simple as possible to non-AWS experts: you bring credentials, GlacierVault handles the rest.
+
+---
+
+## THIS VERY MUCH A WORK-IN-PROGRESS REPO!
+ - I've tested from backup to restore but it has been limited.
+ - Do not rely on this project for your real backups yet!
+ - I'd be very open to PRs if anyone wants to dig in.
 
 <img width="934" height="555" alt="image" src="https://github.com/user-attachments/assets/ea0e41c0-9c51-4071-b240-ac97daf67864" />
 <img width="1053" height="926" alt="image" src="https://github.com/user-attachments/assets/2a25e9a7-2b83-4184-8159-2c7a3614b07d" />
