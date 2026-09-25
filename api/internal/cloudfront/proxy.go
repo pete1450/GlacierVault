@@ -104,6 +104,15 @@ func (p *Proxy) serveViaCloudFront(w http.ResponseWriter, r *http.Request, key s
 		writeS3Error(w, http.StatusInternalServerError, "InternalError", "could not build upstream request")
 		return
 	}
+	// Forward range/conditional headers: rustic reads packs with ranged
+	// GETs (e.g. Range: bytes=0-46). Dropping Range makes CloudFront
+	// return the whole object, which rustic rejects as "too much data".
+	// (Signed-URL auth covers the URL only, so forwarding headers is safe.)
+	for _, h := range []string{"Range", "If-Match", "If-None-Match", "If-Modified-Since", "If-Unmodified-Since"} {
+		if v := r.Header.Get(h); v != "" {
+			upstream.Header.Set(h, v)
+		}
+	}
 	resp, err := p.httpClient.Do(upstream)
 	if err != nil {
 		writeS3Error(w, http.StatusBadGateway, "InternalError", "upstream fetch failed: "+err.Error())
