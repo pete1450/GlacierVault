@@ -13,6 +13,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -843,13 +844,23 @@ func (s *Server) handleSnapshotFiles(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Normalize the prefix: "" for the snapshot root, otherwise "/dir/".
+	// The file_index stores full paths (e.g. "/backuptest/testfile.tst"),
+	// so collapse deeper entries to their immediate child of the prefix:
+	// browsing the root of a snapshot containing only /backuptest/testfile.tst
+	// must show just "backuptest/", not the file as well.
+	norm := ""
+	if prefix != "" {
+		norm = "/" + strings.Trim(prefix, "/") + "/"
+	}
+
 	query := `SELECT path, size, mtime, is_dir FROM file_index WHERE snapshot_id=?`
 	args := []interface{}{snapshotRowID}
-	if prefix != "" {
+	if norm != "" {
 		query += ` AND path LIKE ?`
-		args = append(args, prefix+"%")
+		args = append(args, norm+"%")
 	}
-	query += ` ORDER BY is_dir DESC, path LIMIT 1000`
+	query += ` ORDER BY path LIMIT 5000`
 
 	rows, err := s.DB.QueryContext(r.Context(), query, args...)
 	if err != nil {
@@ -857,14 +868,64 @@ func (s *Server) handleSnapshotFiles(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer rows.Close()
-	var files []map[string]interface{}
+	type child struct {
+		path      string
+		size      int64
+		mtime     string
+		isDir     bool
+		synthetic bool // derived from a deeper path, no real index row
+	}
+	byPath := map[string]*child{}
+	var order []string
 	for rows.Next() {
 		var path, mtime string
 		var size int64
 		var isDir int
 		rows.Scan(&path, &size, &mtime, &isDir)
+		if !strings.HasPrefix(path, norm) {
+			continue
+		}
+		rel := strings.TrimPrefix(strings.TrimPrefix(path, norm), "/")
+		if rel == "" {
+			continue
+		}
+		c := &child{}
+		// Re-anchor to an absolute path: norm is "" or "/dir/".
+		abs := func(seg string) string { return strings.TrimSuffix(norm, "/") + "/" + seg }
+		if i := strings.Index(rel, "/"); i >= 0 {
+			// Deeper than one level: show the immediate subdirectory.
+			c.path = abs(rel[:i])
+			c.isDir = true
+			c.synthetic = true
+		} else {
+			c.path = abs(rel)
+			c.size = size
+			c.mtime = mtime
+			c.isDir = isDir == 1
+		}
+		if existing, ok := byPath[c.path]; ok {
+			// Prefer a real index row over a synthesized directory entry.
+			if existing.synthetic && !c.synthetic {
+				*existing = *c
+			}
+			continue
+		}
+		byPath[c.path] = c
+		order = append(order, c.path)
+	}
+	// Directories first, then alphabetical, as before.
+	sort.SliceStable(order, func(i, j int) bool {
+		a, b := byPath[order[i]], byPath[order[j]]
+		if a.isDir != b.isDir {
+			return a.isDir
+		}
+		return a.path < b.path
+	})
+	var files []map[string]interface{}
+	for _, p := range order {
+		c := byPath[p]
 		files = append(files, map[string]interface{}{
-			"path": path, "size": size, "mtime": mtime, "isDir": isDir == 1,
+			"path": c.path, "size": c.size, "mtime": c.mtime, "isDir": c.isDir,
 		})
 	}
 	if files == nil {
