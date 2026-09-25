@@ -234,6 +234,45 @@ func TestProxyListObjectsPassthrough(t *testing.T) {
 	}
 }
 
+func TestProxyForwardsRangeHeader(t *testing.T) {
+	// Rustic reads packs with ranged GETs; the proxy must forward the
+	// Range header or CloudFront returns the whole object and rustic
+	// fails with "reader got too much data".
+	cf := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("Signature") == "" {
+			http.Error(w, "unsigned", http.StatusForbidden)
+			return
+		}
+		if got := r.Header.Get("Range"); got != "bytes=0-46" {
+			http.Error(w, "Range not forwarded, got: "+got, http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Range", "bytes 0-46/124")
+		w.Header().Set("Content-Length", "47")
+		w.WriteHeader(http.StatusPartialContent)
+		w.Write(make([]byte, 47))
+	}))
+	defer cf.Close()
+	proxy := testProxy(t, cf)
+
+	req := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:18923/cold-bucket/data/41/4135db6a", nil)
+	req.Header.Set("Range", "bytes=0-46")
+	rec := httptest.NewRecorder()
+	proxy.ServeHTTP(rec, req)
+
+	res := rec.Result()
+	if res.StatusCode != http.StatusPartialContent {
+		t.Fatalf("status = %d, want 206", res.StatusCode)
+	}
+	body, _ := io.ReadAll(res.Body)
+	if len(body) != 47 {
+		t.Fatalf("body length = %d, want 47", len(body))
+	}
+	if cr := res.Header.Get("Content-Range"); cr != "bytes 0-46/124" {
+		t.Fatalf("Content-Range = %q", cr)
+	}
+}
+
 func TestProxyPassthroughRejectsOtherBuckets(t *testing.T) {
 	cf := fakeCloudFront(t, map[string][]byte{})
 	defer cf.Close()
