@@ -844,25 +844,19 @@ func (s *Server) handleSnapshotFiles(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Normalize the prefix: "" for the snapshot root, otherwise "/dir/".
-	// The file_index stores full paths (e.g. "/backuptest/testfile.tst"),
-	// so collapse deeper entries to their immediate child of the prefix:
-	// browsing the root of a snapshot containing only /backuptest/testfile.tst
-	// must show just "backuptest/", not the file as well.
+	// Normalize the prefix into the relative form `rustic ls` produces:
+	// "" for the snapshot root, otherwise "dir/". Stored paths are relative
+	// (e.g. "backuptest/testfile.tst"); trim a stray leading slash so both
+	// path styles match. Collapse deeper entries to their immediate child of
+	// the prefix: browsing the root of a snapshot containing only
+	// backuptest/testfile.tst must show just "backuptest/", not the file.
 	norm := ""
 	if prefix != "" {
-		norm = "/" + strings.Trim(prefix, "/") + "/"
+		norm = strings.Trim(prefix, "/") + "/"
 	}
 
-	query := `SELECT path, size, mtime, is_dir FROM file_index WHERE snapshot_id=?`
-	args := []interface{}{snapshotRowID}
-	if norm != "" {
-		query += ` AND path LIKE ?`
-		args = append(args, norm+"%")
-	}
-	query += ` ORDER BY path LIMIT 5000`
-
-	rows, err := s.DB.QueryContext(r.Context(), query, args...)
+	query := `SELECT path, size, mtime, is_dir FROM file_index WHERE snapshot_id=? ORDER BY path LIMIT 5000`
+	rows, err := s.DB.QueryContext(r.Context(), query, snapshotRowID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -882,23 +876,22 @@ func (s *Server) handleSnapshotFiles(w http.ResponseWriter, r *http.Request) {
 		var size int64
 		var isDir int
 		rows.Scan(&path, &size, &mtime, &isDir)
-		if !strings.HasPrefix(path, norm) {
+		p := strings.TrimPrefix(path, "/")
+		if !strings.HasPrefix(p, norm) {
 			continue
 		}
-		rel := strings.TrimPrefix(strings.TrimPrefix(path, norm), "/")
+		rel := strings.TrimPrefix(p, norm)
 		if rel == "" {
 			continue
 		}
 		c := &child{}
-		// Re-anchor to an absolute path: norm is "" or "/dir/".
-		abs := func(seg string) string { return strings.TrimSuffix(norm, "/") + "/" + seg }
 		if i := strings.Index(rel, "/"); i >= 0 {
 			// Deeper than one level: show the immediate subdirectory.
-			c.path = abs(rel[:i])
+			c.path = norm + rel[:i]
 			c.isDir = true
 			c.synthetic = true
 		} else {
-			c.path = abs(rel)
+			c.path = norm + rel
 			c.size = size
 			c.mtime = mtime
 			c.isDir = isDir == 1

@@ -55,11 +55,12 @@ func TestHandleSnapshotFilesCollapsesToImmediateChildren(t *testing.T) {
 		path  string
 		isDir int
 	}{
-		{"/backuptest", 1},
-		{"/backuptest/testfile.tst", 0},
-		{"/backuptest/sub", 1},
-		{"/backuptest/sub/deep.txt", 0},
-		{"/loose.txt", 0},
+		// `rustic ls --json` yields relative paths, no leading slash.
+		{"backuptest", 1},
+		{"backuptest/testfile.tst", 0},
+		{"backuptest/sub", 1},
+		{"backuptest/sub/deep.txt", 0},
+		{"loose.txt", 0},
 	}
 	for _, r := range indexRows {
 		if _, err := db.Exec(`INSERT INTO file_index (snapshot_id, path, size, is_dir) VALUES (1, ?, 6, ?)`,
@@ -72,17 +73,24 @@ func TestHandleSnapshotFilesCollapsesToImmediateChildren(t *testing.T) {
 	s := &Server{DB: db, Catalog: catalog.New(db, nil)}
 
 	root := filePaths(getSnapshotFiles(t, s, "1", ""))
-	if want := []string{"/backuptest", "/loose.txt"}; !reflect.DeepEqual(root, want) {
+	if want := []string{"backuptest", "loose.txt"}; !reflect.DeepEqual(root, want) {
 		t.Fatalf("root = %v, want %v", root, want)
 	}
 
-	sub := filePaths(getSnapshotFiles(t, s, "1", "/backuptest/"))
-	if want := []string{"/backuptest/sub", "/backuptest/testfile.tst"}; !reflect.DeepEqual(sub, want) {
+	sub := filePaths(getSnapshotFiles(t, s, "1", "backuptest/"))
+	if want := []string{"backuptest/sub", "backuptest/testfile.tst"}; !reflect.DeepEqual(sub, want) {
 		t.Fatalf("sub = %v, want %v", sub, want)
 	}
 
-	deep := filePaths(getSnapshotFiles(t, s, "1", "/backuptest/sub/"))
-	if want := []string{"/backuptest/sub/deep.txt"}; !reflect.DeepEqual(deep, want) {
+	// A stray leading slash in the prefix (as an older client could send)
+	// must still resolve.
+	subSlashed := filePaths(getSnapshotFiles(t, s, "1", "/backuptest/"))
+	if want := []string{"backuptest/sub", "backuptest/testfile.tst"}; !reflect.DeepEqual(subSlashed, want) {
+		t.Fatalf("sub (slashed prefix) = %v, want %v", subSlashed, want)
+	}
+
+	deep := filePaths(getSnapshotFiles(t, s, "1", "backuptest/sub/"))
+	if want := []string{"backuptest/sub/deep.txt"}; !reflect.DeepEqual(deep, want) {
 		t.Fatalf("deep = %v, want %v", deep, want)
 	}
 }
