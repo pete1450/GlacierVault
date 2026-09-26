@@ -153,9 +153,11 @@ and manual restore instructions. The outline:
 4. List snapshots: `rustic -P ./rustic snapshots` (hot bucket — instant).
 5. Restore (destination is positional; `%paths` is replaced by rustic with
    the exact S3 keys the snapshot needs):
-   `rustic -P ./rustic restore <snapshot-id> /destination --warm-up-command "warmup-s3-archives %paths" --warm-up-batch 1000`.
-   The tool submits an S3 Batch restore at the cheapest BULK tier and waits
-   for Glacier, then rustic downloads automatically.
+   `rustic -P ./rustic restore <snapshot-id> /destination --warm-up-command "glaciervault-warmup %paths" --warm-up-batch 1000`.
+   The wrapper retries warmup-s3-archives on its SQS wait timeout (the
+   tool's wait budget is expiration_in_days × 24h with no separate knob, and
+   BULK can take up to 48h); the tool submits an S3 Batch restore at the
+   cheapest BULK tier and waits for Glacier, then rustic downloads automatically.
 
 **Test this before you need it.** A backup you haven't restored is a hope,
 not a backup. After your first real backup completes, do a small partial

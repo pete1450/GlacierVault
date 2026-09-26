@@ -387,9 +387,10 @@ type RestoreOptions struct {
 //
 // Destination is positional (rustic has no --target flag). When
 // opts.Warmup is set, rustic warms the needed data packs first by invoking
-// `warmup-s3-archives` with the S3 keys of the needed packs in batches;
-// the tool submits S3 Batch restore jobs and blocks until Glacier has the
-// packs available, then rustic proceeds with the download.
+// `glaciervault-warmup` (a wrapper around warmup-s3-archives that retries the
+// tool on its SQS wait timeout) with the S3 keys of the needed packs in
+// batches; the tool submits S3 Batch restore jobs and blocks until Glacier
+// has the packs available, then rustic proceeds with the download.
 func (e *Engine) RunRestore(ctx context.Context, buf *RingBuffer, snapshotID, destination string, paths []string, opts RestoreOptions) error {
 	args := []string{"restore", snapshotID, destination}
 	for _, p := range paths {
@@ -397,7 +398,7 @@ func (e *Engine) RunRestore(ctx context.Context, buf *RingBuffer, snapshotID, de
 	}
 	if opts.Warmup {
 		args = append(args,
-			"--warm-up-command", "warmup-s3-archives %paths",
+			"--warm-up-command", "glaciervault-warmup %paths",
 			"--warm-up-batch", "1000",
 		)
 	}

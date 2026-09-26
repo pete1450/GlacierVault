@@ -27,8 +27,14 @@ const restoreTimeout = 72 * time.Hour
 const glacierJobTier = "BULK"
 
 // restoredCopyDays is how long the temporarily restored S3 Standard copy of
-// each pack is kept. The download starts immediately after the warmup phase,
-// so a small window is enough. 1 is the minimum AWS allows.
+// each pack is kept. 1 is the minimum AWS allows; the download starts as soon
+// as the packs thaw, so a small window is enough. Note this does NOT limit
+// how long we wait for the thaw: warmup-s3-archives derives its SQS wait
+// budget from this same value, so rustic invokes it through the
+// glaciervault-warmup wrapper, which retries the tool when its wait times
+// out. Retries are safe because the tool's RestoreStatus pre-check
+// short-circuits on packs that thawed between attempts, and duplicate Batch
+// restore requests are idempotent.
 const restoredCopyDays = 1
 
 // Status values for restore_jobs.

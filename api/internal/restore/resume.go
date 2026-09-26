@@ -327,7 +327,7 @@ func (m *Manager) downloadAfterWarmup(ctx context.Context, jobID int64, buf *eng
 		ConfigPath: m.cfRestoreProfile(ctx, buf, workDir),
 	}); err != nil {
 		m.setStatus(ctx, jobID, StatusFailed,
-			fmt.Sprintf("download after warmup: %v (if the 1-day restored copies expired, start a new restore to warm the packs again)", err))
+			fmt.Sprintf("download after warmup: %v (if the restored copies expired, start a new restore to warm the packs again)", err))
 		return
 	}
 	m.db.ExecContext(ctx, `UPDATE restore_jobs SET completed_at=? WHERE id=?`, time.Now().UTC(), jobID)

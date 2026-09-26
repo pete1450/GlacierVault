@@ -177,19 +177,27 @@ UI: pick snapshot → browse → select files (or nothing = full) → destinatio
   → engine spawns ONE command:
 
     rustic restore <snapshot> <destination> \
-      --warm-up-command "warmup-s3-archives %paths" \
+      --warm-up-command "glaciervault-warmup %paths" \
       --warm-up-batch 1000
 
   1. rustic resolves the EXACT pack set the selected files need
      (dedup-aware: shared packs thawed once)
-  2. per batch of ≤1000 keys, rustic execs warmup-s3-archives with the S3 keys
-  3. warmup-s3-archives, using a per-job config written to the job's working
-     dir (mode 0600: batch role ARN, manifest/report buckets, account ID,
-     SQS queue URL, BULK tier, 2-day expiry):
+  2. per batch of ≤1000 keys, rustic execs glaciervault-warmup with the S3 keys
+  3. glaciervault-warmup runs warmup-s3-archives, using a per-job config
+     written to the job's working dir (mode 0600: batch role ARN,
+     manifest/report buckets, account ID, SQS queue URL, BULK tier, 1-day
+     copy expiry):
        - uploads the key manifest to the batch-manifests bucket
        - creates the S3 Batch Operations restore job (BULK tier)
-       - blocks until every pack reports OBJECT_RESTORE_COMPLETED via SQS
-         (up to the 72 h overall timeout)
+       - blocks until every pack reports OBJECT_RESTORE_COMPLETED via SQS.
+     The tool's wait budget is expiration_in_days × 24h with no separate
+     knob, so a 1-day expiry alone would give up after 24h on a healthy
+     thaw (BULK can take up to 48h). The wrapper retries the tool on its
+     "Timed out waiting" message — up to 3 attempts × 24h = 72h total,
+     matching the restore timeout — while copies keep the 1-day expiry.
+     Retries are safe: the tool's RestoreStatus pre-check short-circuits on
+     packs that thawed between attempts, and duplicate Batch restore
+     requests are idempotent. Any other tool failure aborts immediately.
   4. rustic downloads the thawed packs and writes files to the destination.
      When the CloudFront free-egress path is enabled, the restore runs with
      a per-job rustic profile whose cold backend points at the localhost
