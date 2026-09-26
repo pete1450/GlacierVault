@@ -24,7 +24,7 @@ const (
 	warmupAttemptHours  = 24
 	maxWarmupAttempts   = 3
 	perBatchWaitHours   = warmupAttemptHours * maxWarmupAttempts // 72
-	defaultDownloadRate = 250                                    // GB/day, conservative home link
+	defaultDownloadRate = 1080                                   // GB/day ≈ 100 Mbit/s
 )
 
 // WarmupPlan sizes a restore's Glacier warm-up: how many sequential batches

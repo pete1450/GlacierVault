@@ -118,9 +118,9 @@ log:
    overestimating costs pennies, underestimating breaks restores).
 2. **Batches:** N = ceil(packs / 1000).
 3. **Download headroom:** DL = 0 for a single batch, else
-   ceil(packs × 0.5 GB / download-rate), with a conservative default
-   download rate of 250 GB/day (change it in **Settings → Restore warm-up
-   tuning** if your link is faster).
+   ceil(packs × 0.5 GB / download-rate), with a default download rate of
+   1080 GB/day (≈100 Mbit/s; change it in **Settings → Restore warm-up
+   tuning** if your link is slower).
 4. **Per-batch copy expiry** (set by the `glaciervault-warmup` wrapper
    before each batch's Batch job is submitted):
    `E_k = 2·(N−k) + DL + 1` days. The `2·(N−k)` covers the worst case where
@@ -129,14 +129,14 @@ log:
 5. **Overall timeout:** `72·N + 24·(DL+1)` hours (72 h per batch: 3 wrapper
    attempts × 24 h SQS watch budget, plus download headroom).
 
-Worked examples (full 1000-pack batches, default 250 GB/day):
+Worked examples (full 1000-pack batches, default 1080 GB/day):
 
 | Packs | Batches | Copy expiry per batch (days) | Overall timeout |
 |---|---|---|---|
 | 1–1000 | 1 | [1] | 96 h |
-| 1001–2000 | 2 | [7, 5] | 240 h |
-| 2001–3000 | 3 | [11, 9, 7] | 384 h |
-| 3001–4000 | 4 | [15, 13, 11, 9] | 528 h |
+| 1001–2000 | 2 | [4, 2] | 192 h |
+| 2001–3000 | 3 | [7, 5, 3] | 288 h |
+| 3001–4000 | 4 | [9, 7, 5, 3] | 360 h |
 
 A single batch — everything up to ~500 GB — keeps the **1-day** copy
 expiry. Longer expiries only ever apply past that, and each batch gets the
@@ -149,8 +149,9 @@ the last batch only covers its own download.
 > run end-to-end yet: the per-batch expiry rewrite, the SQS budget
 > interaction (`expiration_in_days × 24 h` per tool invocation), and the
 > batch-counter recovery across a container restart all need a live
-> multi-batch run to confirm. The download-rate default (250 GB/day) is a
-> conservative guess — measure your actual restore throughput and tune it.
+> multi-batch run to confirm. The download-rate default (1080 GB/day ≈
+> 100 Mbit/s) is a reasonable starting point, not a measurement — check your
+> actual restore throughput and tune it.
 > Until then, treat the table above as the design intent, not a proven
 > behavior.
 
