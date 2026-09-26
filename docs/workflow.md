@@ -89,8 +89,70 @@ Batch job are marked failed (safe to retry), while jobs with a recorded
 Batch job ID **resume**: the server re-attaches to the in-flight Batch job
 and runs the download as soon as Glacier reports the packs restored. No
 duplicate Batch job, no second 48-hour wait. (Caveat: the temporary
-restored copies expire after 2 days, so a restart that lasts days still
-needs a fresh restore.)
+restored copies expire — see the sizing below — so a restart that lasts
+longer than the copy lifetime still needs a fresh restore.)
+
+### Warm-up sizing: batches, copy expiry, and timeout
+
+This is the part of the restore most likely to surprise you, so here is the
+full reasoning.
+
+rustic warms packs in **sequential batches of 1000** (`--warm-up-batch
+1000`): batch 2's S3 Batch restore job is only submitted after batch 1 has
+*fully thawed*, and the download only starts after the *last* batch thaws.
+But a restored (thawed) S3 copy lives only `expiration_in_days` from the
+moment *its own* thaw completes. With a single fixed expiry, a multi-batch
+restore is caught in a trap:
+
+- too short, and the first batches' copies **expire before the download
+  starts** (each later batch can take up to the 48 h Bulk SLA);
+- too long, and the last batches' copies sit in S3 Standard for days after
+  the download finished, costing storage for nothing.
+
+GlacierVault therefore sizes every restore **dynamically**, before the
+first Batch job is submitted, and logs the full calculation to the restore
+log:
+
+1. **Count packs.** `rustic cat index` is parsed for distinct data packs —
+   an upper bound on what the restore needs (the safe direction;
+   overestimating costs pennies, underestimating breaks restores).
+2. **Batches:** N = ceil(packs / 1000).
+3. **Download headroom:** DL = 0 for a single batch, else
+   ceil(packs × 0.5 GB / download-rate), with a conservative default
+   download rate of 250 GB/day (change it in **Settings → Restore warm-up
+   tuning** if your link is faster).
+4. **Per-batch copy expiry** (set by the `glaciervault-warmup` wrapper
+   before each batch's Batch job is submitted):
+   `E_k = 2·(N−k) + DL + 1` days. The `2·(N−k)` covers the worst case where
+   every later batch takes the full 48 h Bulk SLA; `DL` covers the download
+   on a slow link; `+1` is the AWS minimum.
+5. **Overall timeout:** `72·N + 24·(DL+1)` hours (72 h per batch: 3 wrapper
+   attempts × 24 h SQS watch budget, plus download headroom).
+
+Worked examples (full 1000-pack batches, default 250 GB/day):
+
+| Packs | Batches | Copy expiry per batch (days) | Overall timeout |
+|---|---|---|---|
+| 1–1000 | 1 | [1] | 96 h |
+| 1001–2000 | 2 | [7, 5] | 240 h |
+| 2001–3000 | 3 | [11, 9, 7] | 384 h |
+| 3001–4000 | 4 | [15, 13, 11, 9] | 528 h |
+
+A single batch — everything up to ~500 GB — keeps the **1-day** copy
+expiry. Longer expiries only ever apply past that, and each batch gets the
+minimum its position requires: the first batch survives the later thaws,
+the last batch only covers its own download.
+
+> **Needs further consideration and testing.** The 48 h-per-batch SLA
+> bound and the sequential-batch behavior are verified against rustic's
+> warm-up implementation, but no multi-batch (1000+ pack) restore has been
+> run end-to-end yet: the per-batch expiry rewrite, the SQS budget
+> interaction (`expiration_in_days × 24 h` per tool invocation), and the
+> batch-counter recovery across a container restart all need a live
+> multi-batch run to confirm. The download-rate default (250 GB/day) is a
+> conservative guess — measure your actual restore throughput and tune it.
+> Until then, treat the table above as the design intent, not a proven
+> behavior.
 
 **Partial vs. full restore costs** (us-east-1, Bulk, CloudFront free-egress path enabled):
 
@@ -153,9 +215,11 @@ and manual restore instructions. The outline:
 4. List snapshots: `rustic -P ./rustic snapshots` (hot bucket — instant).
 5. Restore (destination is positional; `%paths` is replaced by rustic with
    the exact S3 keys the snapshot needs):
-   `rustic -P ./rustic restore <snapshot-id> /destination --warm-up-command "warmup-s3-archives %paths" --warm-up-batch 1000`.
-   The tool submits an S3 Batch restore at the cheapest BULK tier and waits
-   for Glacier, then rustic downloads automatically.
+   `rustic -P ./rustic restore <snapshot-id> /destination --warm-up-command "glaciervault-warmup %paths" --warm-up-batch 1000`.
+   The wrapper retries warmup-s3-archives on its SQS wait timeout (the
+   tool's wait budget is expiration_in_days × 24h with no separate knob, and
+   BULK can take up to 48h); the tool submits an S3 Batch restore at the
+   cheapest BULK tier and waits for Glacier, then rustic downloads automatically.
 
 **Test this before you need it.** A backup you haven't restored is a hope,
 not a backup. After your first real backup completes, do a small partial

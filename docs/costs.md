@@ -80,8 +80,8 @@ transfer.
 
 ## Worked examples
 
-Assumptions: us-east-1, Bulk retrieval, restored copies kept 2 days (the app
-default), egress counted against CloudFront's 1 TB/month free data-transfer
+Assumptions: us-east-1, Bulk retrieval, restored copies kept 1 day (the app
+default; the AWS minimum), egress counted against CloudFront's 1 TB/month free data-transfer
 allowance (account-wide; assumed otherwise unused here).
 
 ### Example 1 — Documents: 10 GB, ~50,000 small files

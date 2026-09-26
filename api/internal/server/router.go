@@ -95,6 +95,8 @@ func (s *Server) Router() http.Handler {
 		r.Post("/api/restores", s.handleInitiateRestore)
 		r.Get("/api/restores", s.handleListRestores)
 		r.Get("/api/restores/{id}", s.handleGetRestore)
+		r.Get("/api/restores/tuning", s.handleGetRestoreTuning)
+		r.Put("/api/restores/tuning", s.handleSaveRestoreTuning)
 
 		// Catalog.
 		r.Post("/api/catalog/rebuild", s.handleRebuildCatalog)
@@ -1139,6 +1141,19 @@ func (s *Server) handleRecoveryPackage(w http.ResponseWriter, r *http.Request) {
 	writeZipFile(zw, "repo.password", repoPass)
 	writeZipFile(zw, "warmup-s3-archives-config.toml", fmt.Sprintf(`# GlacierVault warmup tool config. Place in the working directory
 # from which you run the restore command below.
+#
+# expiration_in_days: how long each thawed copy stays in S3 Standard.
+# rustic warms packs in SEQUENTIAL batches of 1000 (--warm-up-batch): batch 2
+# is only submitted after batch 1 thaws, and downloads start after the LAST
+# batch thaws — but each copy's clock starts at its OWN thaw. So size this
+# for the FIRST batch: expiration_in_days = 2*(N-1) + DL + 1, where
+# N = ceil(data packs / 1000) and DL = download headroom in days
+# (ceil(total GB / your download GB per day)). The default 7 below covers up
+# to 2 batches (~1 TB at a conservative 250 GB/day download rate). For a
+# single batch (<= 1000 packs) 1 day is enough; for 3+ batches, raise it —
+# e.g. 3000 packs / ~1.5 TB -> N=3, DL=6 -> 11 days. Too short breaks the
+# restore (early batches expire before the download starts); too long just
+# costs a little S3 Standard storage. See docs/workflow.md "Warm-up sizing".
 [aws_resources]
 account_id = %q
 cold_bucket_name = %q

@@ -63,6 +63,14 @@ RUN curl -fsSL -o /usr/local/bin/warmup-s3-archives \
     && chmod +x /usr/local/bin/warmup-s3-archives \
     && test -x /usr/local/bin/warmup-s3-archives
 
+# glaciervault-warmup: wrapper around warmup-s3-archives used as rustic's
+# --warm-up-command. The tool's SQS wait budget is expiration_in_days × 24h
+# with no separate knob; the wrapper retries it on its wait timeout so the
+# total wait covers Bulk's 48h SLA while restored copies keep the 1-day expiry.
+COPY docker/glaciervault-warmup.sh /usr/local/bin/glaciervault-warmup
+RUN chmod +x /usr/local/bin/glaciervault-warmup \
+    && test -x /usr/local/bin/glaciervault-warmup
+
 # AWS CDK (for infrastructure deployment).
 RUN npm install -g aws-cdk@latest --quiet
 
