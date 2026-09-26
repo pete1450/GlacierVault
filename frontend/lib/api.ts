@@ -138,3 +138,10 @@ export interface RestoreJob {
   restoreStartedAt: string | null; completedAt: string | null; errorMessage: string
   logOutput: string; createdAt: string
 }
+
+export interface RestoreTuning {
+  downloadGbPerDay: number
+}
+export const getRestoreTuning = () => req<RestoreTuning>('GET', '/restores/tuning')
+export const saveRestoreTuning = (cfg: RestoreTuning) =>
+  req<{ ok: boolean }>('PUT', '/restores/tuning', cfg)

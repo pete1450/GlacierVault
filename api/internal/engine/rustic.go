@@ -714,3 +714,58 @@ func parseHumanSize(s string) (int64, error) {
 	}
 	return int64(f * mult), nil
 }
+
+// indexPack is the subset of rustic's index JSON we need to count data packs.
+// The format is restic-compatible: an array of index objects, each with a
+// packs array; each pack lists its blobs with a type ("data" or "tree").
+type indexPack struct {
+	ID    string `json:"id"`
+	Blobs []struct {
+		ID   string `json:"id"`
+		Type string `json:"type"`
+	} `json:"blobs"`
+}
+
+// countDataPacks parses `rustic cat index` JSON and returns the number of
+// distinct packs that contain at least one data blob. Tree packs are excluded:
+// they live in the hot bucket and are never part of the Glacier warm-up set.
+// Parsing is tolerant — unknown fields are ignored, and a pack is only
+// counted when we positively see a data blob in it.
+func countDataPacks(indexJSON []byte) (int, error) {
+	var indexes []struct {
+		Packs []indexPack `json:"packs"`
+	}
+	if err := json.Unmarshal(indexJSON, &indexes); err != nil {
+		return 0, fmt.Errorf("parse index JSON: %w", err)
+	}
+	seen := map[string]bool{}
+	for _, idx := range indexes {
+		for _, p := range idx.Packs {
+			if p.ID == "" || seen[p.ID] {
+				continue
+			}
+			for _, b := range p.Blobs {
+				if b.Type == "data" {
+					seen[p.ID] = true
+					break
+				}
+			}
+		}
+	}
+	return len(seen), nil
+}
+
+// CountDataPacks returns the number of distinct data packs in the repository
+// index. This is an upper bound on the number of packs any single restore
+// needs to warm (a restore only touches the packs its snapshot references),
+// which is the safe direction for sizing warm-up batches, copy expiry, and
+// the restore timeout: overestimating costs a few extra days of S3 Standard
+// on the packs actually thawed (pennies), while underestimating can break a
+// multi-day restore.
+func (e *Engine) CountDataPacks(ctx context.Context) (int, error) {
+	out, err := e.run(ctx, nil, "cat", "index")
+	if err != nil {
+		return 0, fmt.Errorf("rustic cat index: %w", err)
+	}
+	return countDataPacks(out)
+}

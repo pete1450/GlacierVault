@@ -312,7 +312,7 @@ func (m *Manager) downloadAfterWarmup(ctx context.Context, jobID int64, buf *eng
 		m.setStatus(ctx, jobID, StatusFailed, fmt.Sprintf("resume: %v", err))
 		return
 	}
-	workDir, err := m.writeWarmupConfig(ctx, jobID)
+	workDir, err := m.writeWarmupConfig(ctx, jobID, WarmupPlan{Batches: 1})
 	if err != nil {
 		m.setStatus(ctx, jobID, StatusFailed, fmt.Sprintf("resume: %v", err))
 		return
