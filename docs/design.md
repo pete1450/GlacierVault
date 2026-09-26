@@ -233,6 +233,18 @@ then runs step 4 as a plain download-only restore (no second Batch job, no
 second 48 h wait). The Batch job ID is also exposed on the job-detail API
 as `batchJobId` for debugging.
 
+**Known gap — multi-batch restarts:** only the *first* submitted batch's
+job ID is persisted (`WHERE batch_job_id IS NULL` ignores later ones), and
+the wrapper's batch counter lives in the temp work dir, which does not
+survive container replacement. If the container restarts during a
+multi-batch (1000+ packs) warmup, unsubmitted batches are lost for that
+restore: the resume path waits for the recorded batch, then runs the
+warmup-free download, which fails on packs that were never thawed. The
+recovery is to start a new restore — `warmup-s3-archives` re-checks every
+pack via `HeadObject` and only re-requests still-cold ones, so thawed
+batches are reused until their per-batch copy expiry. Single-batch
+restores are unaffected.
+
 Restore stages shown in the UI: `queued → warmup_requested →
 retrieval_in_progress → retrieval_complete → restoring → completed`
 (`failed` on error). The long pole is step 3 — Bulk retrieval can take up to

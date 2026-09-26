@@ -92,6 +92,18 @@ duplicate Batch job, no second 48-hour wait. (Caveat: the temporary
 restored copies expire — see the sizing below — so a restart that lasts
 longer than the copy lifetime still needs a fresh restore.)
 
+> **Multi-batch restores and restarts — known gap.** Only the *first*
+> submitted batch's Batch job ID is recorded. If the container restarts
+> during a multi-batch (1000+ packs) warmup, any batches that had not been
+> submitted yet are **lost for that restore**: the resume path waits for
+> the one recorded batch and then runs a warmup-free download, which will
+> fail on packs that were never thawed. Single-batch restores (≤ 1000
+> packs) are unaffected — the single recorded job covers the whole warmup.
+> If you hit this, start a new restore for the same snapshot and paths:
+> the warmup tool re-checks every pack and only re-requests the still-cold
+> ones, so already-thawed batches are picked up, not re-thawed (their
+> copies stay valid until their per-batch expiry).
+
 ### Warm-up sizing: batches, copy expiry, and timeout
 
 This is the part of the restore most likely to surprise you, so here is the
