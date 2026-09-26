@@ -64,7 +64,7 @@ export default function SettingsPage() {  const router = useRouter()
   const [notifyTesting, setNotifyTesting] = useState(false)
 
   // Restore warm-up tuning
-  const [dlRate, setDlRate] = useState('250')
+  const [dlRate, setDlRate] = useState('1080')
   const [tuningMsg, setTuningMsg] = useState('')
   const [tuningSaving, setTuningSaving] = useState(false)
 
@@ -497,8 +497,8 @@ export default function SettingsPage() {  const router = useRouter()
               className="w-40 px-3 py-2 bg-gray-800 text-white rounded-lg border border-gray-700 focus:outline-none focus:border-blue-500 text-sm"
             />
             <p className="text-xs text-gray-500 mt-1">
-              Used only to size the download headroom for multi-batch restores. Default 250
-              (≈ a 25 Mbps link). Raise it if your connection is faster.
+              Used only to size the download headroom for multi-batch restores. Default 1080
+              (≈ a 100 Mbps link). Lower it if your connection is slower.
             </p>
           </div>
           <div>

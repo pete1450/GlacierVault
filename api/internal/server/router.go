@@ -1149,11 +1149,11 @@ func (s *Server) handleRecoveryPackage(w http.ResponseWriter, r *http.Request) {
 # for the FIRST batch: expiration_in_days = 2*(N-1) + DL + 1, where
 # N = ceil(data packs / 1000) and DL = download headroom in days
 # (ceil(total GB / your download GB per day)). The default 7 below covers up
-# to 2 batches (~1 TB at a conservative 250 GB/day download rate). For a
-# single batch (<= 1000 packs) 1 day is enough; for 3+ batches, raise it —
-# e.g. 3000 packs / ~1.5 TB -> N=3, DL=6 -> 11 days. Too short breaks the
-# restore (early batches expire before the download starts); too long just
-# costs a little S3 Standard storage. See docs/workflow.md "Warm-up sizing".
+# to 3 batches (~1.5 TB at a 100 Mbit/s download rate). For a single batch
+# (<= 1000 packs) 1 day is enough; for 4+ batches, raise it — e.g. 4000
+# packs / ~2 TB -> N=4, DL=2 -> 9 days. Too short breaks the restore (early
+# batches expire before the download starts); too long just costs a little
+# S3 Standard storage. See docs/workflow.md "Warm-up sizing".
 [aws_resources]
 account_id = %q
 cold_bucket_name = %q
