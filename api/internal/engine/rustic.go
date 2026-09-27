@@ -395,7 +395,20 @@ type RestoreOptions struct {
 func (e *Engine) RunRestore(ctx context.Context, buf *RingBuffer, snapshotID, destination string, paths []string, opts RestoreOptions) error {
 	args := []string{"restore", snapshotID, destination}
 	for _, p := range paths {
+		p = strings.TrimSuffix(p, "/")
+		if p == "" {
+			continue
+		}
 		args = append(args, "--glob", p)
+		// A selected folder must restore its contents, not just the
+		// directory entry: rustic matches --glob against full snapshot
+		// paths, so a bare directory path matches only the dir itself
+		// (verified against rustic 0.11.4 — a folder restore otherwise
+		// yields an empty directory). Appending /** covers everything
+		// beneath it recursively; for a file path the /** variant matches
+		// nothing, so passing both is safe for files and folders alike
+		// without needing to know which is which.
+		args = append(args, "--glob", p+"/**")
 	}
 	if opts.Warmup {
 		args = append(args,
