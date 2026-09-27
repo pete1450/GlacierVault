@@ -83,7 +83,10 @@ job. Plan restores; batch small ones together.
 
 **Surviving a container restart:** if the container goes down while a
 restore is waiting on Glacier, the job is not lost. GlacierVault records
-the S3 Batch job ID the moment the warmup tool submits it; on startup,
+the S3 Batch job ID the moment the warmup tool submits it (GlacierVault sets
+`RUST_LOG=info` for the tool because its job-ID line is logged at info level
+and env_logger's default is error — without that the ID would never be
+captured); on startup,
 interrupted jobs are triaged automatically — jobs that never submitted a
 Batch job are marked failed (safe to retry), while jobs with a recorded
 Batch job ID **resume**: the server re-attaches to the in-flight Batch job
@@ -100,9 +103,11 @@ longer than the copy lifetime still needs a fresh restore.)
 > fail on packs that were never thawed. Single-batch restores (≤ 1000
 > packs) are unaffected — the single recorded job covers the whole warmup.
 > If you hit this, start a new restore for the same snapshot and paths:
-> the warmup tool re-checks every pack and only re-requests the still-cold
-> ones, so already-thawed batches are picked up, not re-thawed (their
-> copies stay valid until their per-batch expiry).
+> the warmup tool submits a Batch job for all keys in each batch, but that
+> is safe to repeat: already-thawed packs are not re-thawed (their restored
+> copies stay valid until their per-batch expiry, which the re-request
+> aligns/extends), and packs still thawing report RestoreAlreadyInProgress
+> (HTTP 409), which the tool treats as recoverable and keeps waiting on.
 
 ### Warm-up sizing: batches, copy expiry, and timeout
 

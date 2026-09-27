@@ -407,14 +407,30 @@ func (m *Manager) awsEnv(ctx context.Context) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	return append(os.Environ(),
+	return ensureWarmupLogLevel(append(os.Environ(),
 		"AWS_ACCESS_KEY_ID="+s.accessKey,
 		"AWS_SECRET_ACCESS_KEY="+s.secretKey,
 		// The Rust AWS SDK (warmup tool) reads AWS_REGION; AWS CLI-style
 		// tooling reads AWS_DEFAULT_REGION. Set both.
 		"AWS_REGION="+s.region,
 		"AWS_DEFAULT_REGION="+s.region,
-	), nil
+	)), nil
+}
+
+// ensureWarmupLogLevel guarantees the warmup tool emits its S3 Batch job ID.
+// warmup-s3-archives reports "Created S3 batch job. Job ID: <uuid>" at info
+// level via env_logger, whose default level (when RUST_LOG is unset) is
+// error — so without this the line is silently swallowed, the
+// watchForBatchJobID hook never fires, no batch_job_id is recorded, and a
+// container restart fails the restore instead of resuming it. An explicit
+// RUST_LOG (e.g. from the container environment) is respected.
+func ensureWarmupLogLevel(env []string) []string {
+	for _, kv := range env {
+		if strings.HasPrefix(kv, "RUST_LOG=") {
+			return env
+		}
+	}
+	return append(env, "RUST_LOG=info")
 }
 
 func (m *Manager) setStatus(ctx context.Context, jobID int64, status, errMsg string) {
