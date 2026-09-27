@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -726,33 +727,48 @@ type indexPack struct {
 	} `json:"blobs"`
 }
 
-// countDataPacks parses `rustic cat index` JSON and returns the number of
-// distinct packs that contain at least one data blob. Tree packs are excluded:
-// they live in the hot bucket and are never part of the Glacier warm-up set.
-// Parsing is tolerant — unknown fields are ignored, and a pack is only
-// counted when we positively see a data blob in it.
-func countDataPacks(indexJSON []byte) (int, error) {
-	var indexes []struct {
+// indexIDPattern matches `rustic list index` output lines, which use Rust
+// debug formatting — `IndexId(17c07e50...)` — rather than bare IDs.
+// Verified against rustic 0.11.4.
+var indexIDPattern = regexp.MustCompile(`^IndexId\(([0-9a-f]+)\)$`)
+
+// parseIndexIDs extracts bare index IDs from `rustic list index` output,
+// skipping lines that do not match.
+func parseIndexIDs(out []byte) []string {
+	var ids []string
+	for _, line := range strings.Split(string(out), "\n") {
+		if m := indexIDPattern.FindStringSubmatch(strings.TrimSpace(line)); m != nil {
+			ids = append(ids, m[1])
+		}
+	}
+	return ids
+}
+
+// addDataPacks parses one `rustic cat index <ID>` JSON document — a single
+// {"packs": [...]} object, verified against rustic 0.11.4 — and adds the IDs
+// of packs containing at least one data blob to seen. Tree packs are
+// excluded: they live in the hot bucket and are never part of the Glacier
+// warm-up set. Parsing is tolerant — unknown fields are ignored, and a pack
+// is only counted when we positively see a data blob in it.
+func addDataPacks(indexJSON []byte, seen map[string]bool) error {
+	var idx struct {
 		Packs []indexPack `json:"packs"`
 	}
-	if err := json.Unmarshal(indexJSON, &indexes); err != nil {
-		return 0, fmt.Errorf("parse index JSON: %w", err)
+	if err := json.Unmarshal(indexJSON, &idx); err != nil {
+		return fmt.Errorf("parse index JSON: %w", err)
 	}
-	seen := map[string]bool{}
-	for _, idx := range indexes {
-		for _, p := range idx.Packs {
-			if p.ID == "" || seen[p.ID] {
-				continue
-			}
-			for _, b := range p.Blobs {
-				if b.Type == "data" {
-					seen[p.ID] = true
-					break
-				}
+	for _, p := range idx.Packs {
+		if p.ID == "" || seen[p.ID] {
+			continue
+		}
+		for _, b := range p.Blobs {
+			if b.Type == "data" {
+				seen[p.ID] = true
+				break
 			}
 		}
 	}
-	return len(seen), nil
+	return nil
 }
 
 // CountDataPacks returns the number of distinct data packs in the repository
@@ -763,9 +779,26 @@ func countDataPacks(indexJSON []byte) (int, error) {
 // on the packs actually thawed (pennies), while underestimating can break a
 // multi-day restore.
 func (e *Engine) CountDataPacks(ctx context.Context) (int, error) {
-	out, err := e.run(ctx, nil, "cat", "index")
+	// rustic 0.11.4 requires an index ID for `cat index`, so list the index
+	// files first and dump each one. Pack IDs are deduplicated across
+	// indexes via the shared seen set.
+	out, err := e.run(ctx, nil, "list", "index")
 	if err != nil {
-		return 0, fmt.Errorf("rustic cat index: %w", err)
+		return 0, fmt.Errorf("rustic list index: %w", err)
 	}
-	return countDataPacks(out)
+	ids := parseIndexIDs(out)
+	if len(ids) == 0 {
+		return 0, fmt.Errorf("rustic list index: no index files found")
+	}
+	seen := map[string]bool{}
+	for _, id := range ids {
+		doc, err := e.run(ctx, nil, "cat", "index", id)
+		if err != nil {
+			return 0, fmt.Errorf("rustic cat index %s: %w", id, err)
+		}
+		if err := addDataPacks(doc, seen); err != nil {
+			return 0, err
+		}
+	}
+	return len(seen), nil
 }
