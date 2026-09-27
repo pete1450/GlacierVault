@@ -196,6 +196,11 @@ Pack downloads go through the private CloudFront distribution by default
 > Partial restores thaw **whole 512 MiB packs** — restoring a 1 KB file still
 > retrieves its entire pack. That's the price of cheap storage; the byte
 > cost is negligible, just don't expect surgical precision.
+>
+> Selecting a **folder** restores the folder and everything under it,
+> recursively. (Implementation note: rustic matches `--glob` against full
+> snapshot paths, so a bare folder path matches only the directory entry —
+> GlacierVault also passes `<folder>/**` to pull in the contents.)
 
 ## 5. Delete snapshots and prune
 
