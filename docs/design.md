@@ -240,9 +240,12 @@ survive container replacement. If the container restarts during a
 multi-batch (1000+ packs) warmup, unsubmitted batches are lost for that
 restore: the resume path waits for the recorded batch, then runs the
 warmup-free download, which fails on packs that were never thawed. The
-recovery is to start a new restore — `warmup-s3-archives` re-checks every
-pack via `HeadObject` and only re-requests still-cold ones, so thawed
-batches are reused until their per-batch copy expiry. Single-batch
+recovery is to start a new restore — the wrapper re-submits a Batch job for
+all keys in each batch, which is safe to repeat: already-thawed packs are
+not re-thawed (their restored copies stay valid until their per-batch
+expiry, which the re-request aligns/extends), and packs still thawing
+report RestoreAlreadyInProgress (HTTP 409), which the tool treats as
+recoverable and keeps waiting on. Single-batch
 restores are unaffected.
 
 Restore stages shown in the UI: `queued → warmup_requested →

@@ -16,6 +16,9 @@ func TestBatchJobIDFromLine(t *testing.T) {
 		// Typical tool output reporting the submitted job.
 		{"Submitted S3 Batch job 8d5a4b2c-1e3f-4a5b-8c6d-7e8f9a0b1c2d", "8d5a4b2c-1e3f-4a5b-8c6d-7e8f9a0b1c2d"},
 		{"batch job id: 12345678-1234-1234-1234-123456789abc", "12345678-1234-1234-1234-123456789abc"},
+		// The exact line warmup-s3-archives 1.3.0 emits at info level on
+		// submission (this is the line the reattach hook depends on).
+		{"Created S3 batch job. Job ID: 8d5a4b2c-1e3f-4a5b-8c6d-7e8f9a0b1c2d", "8d5a4b2c-1e3f-4a5b-8c6d-7e8f9a0b1c2d"},
 		// ARN form also yields the UUID.
 		{"Job ARN: arn:aws:s3:us-east-1:123456789012:job/8d5a4b2c-1e3f-4a5b-8c6d-7e8f9a0b1c2d", "8d5a4b2c-1e3f-4a5b-8c6d-7e8f9a0b1c2d"},
 		// No "job" mention → ignored even with a UUID present.
@@ -28,6 +31,34 @@ func TestBatchJobIDFromLine(t *testing.T) {
 		if got := batchJobIDFromLine(c.line); got != c.want {
 			t.Errorf("batchJobIDFromLine(%q) = %q, want %q", c.line, got, c.want)
 		}
+	}
+}
+
+func TestEnsureWarmupLogLevel(t *testing.T) {
+	// Absent → added at info, the level the tool's job-ID line needs.
+	env := ensureWarmupLogLevel([]string{"FOO=bar"})
+	found := false
+	for _, kv := range env {
+		if kv == "RUST_LOG=info" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("env=%v, want RUST_LOG=info added", env)
+	}
+	// Present → respected, not overridden or duplicated.
+	env2 := ensureWarmupLogLevel([]string{"RUST_LOG=debug", "FOO=bar"})
+	count := 0
+	for _, kv := range env2 {
+		if kv == "RUST_LOG=debug" {
+			count++
+		}
+		if kv == "RUST_LOG=info" {
+			t.Fatalf("env2=%v, must not add RUST_LOG=info when already set", env2)
+		}
+	}
+	if count != 1 {
+		t.Fatalf("env2=%v, want exactly one RUST_LOG entry", env2)
 	}
 }
 

@@ -25,10 +25,17 @@
 #    48h. This wrapper retries the tool when it reports its wait timeout: up
 #    to MAX_ATTEMPTS attempts × 24h = 72h total per batch.
 #
-# Retries are safe:
-#   - the tool's RestoreStatus pre-check (ListObjectsV2) short-circuits on
-#     packs that thawed between attempts — no SQS wait needed for those;
-#   - duplicate S3 Batch restore requests are idempotent.
+# Retries are safe (verified against the warmup-s3-archives 1.3.0 source):
+#   - every tool invocation submits a fresh S3 Batch job for ALL keys in the
+#     batch; already-thawed packs just get their copy expiry re-aligned
+#     (extended), never re-thawed;
+#   - packs still thawing come back as RestoreAlreadyInProgress (409) in the
+#     batch report, which the tool treats as recoverable, and they stay in
+#     the SQS wait set — each retry genuinely waits a fresh full budget for
+#     them instead of returning early;
+#   - only packs with a restore_expiry_date (fully thawed) are excluded from
+#     the wait set.
+# Each retry costs one more S3 Batch job (~$0.25 per 1000-pack batch).
 # Only the tool's wait timeout is retried; any other failure (bad config,
 # Batch job submission error, ...) aborts immediately with the tool's output.
 #
@@ -92,7 +99,7 @@ if [ -f "$CONFIG_FILE" ]; then
     sed -i "s/^expiration_in_days = .*/expiration_in_days = $EXPIRY_DAYS/" "$CONFIG_FILE"
 fi
 
-echo "glaciervault-warmup: batch $BATCH/$TOTAL_BATCHES ($DATA_PACKS data packs in index) — expiration_in_days=$EXPIRY_DAYS for this batch's restored copies (= 2*($TOTAL_BATCHES-$BATCH) + ${DOWNLOAD_DAYS} download-days + 1); SQS watch budget ~$((EXPIRY_DAYS * 24))h" >&2
+echo "glaciervault-warmup: batch $BATCH/$TOTAL_BATCHES ($DATA_PACKS data packs in index) — expiration_in_days=$EXPIRY_DAYS for this batch's restored copies (= 2*($TOTAL_BATCHES-$BATCH) + ${DOWNLOAD_DAYS} download-days + 1); SQS watch budget ~$((EXPIRY_DAYS * 24))h per attempt, up to $MAX_ATTEMPTS attempts (~$((EXPIRY_DAYS * 24 * MAX_ATTEMPTS))h total)" >&2
 
 tmp="$(mktemp)" || exit 1
 attempt=1

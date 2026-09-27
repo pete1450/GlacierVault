@@ -83,7 +83,10 @@ job. Plan restores; batch small ones together.
 
 **Surviving a container restart:** if the container goes down while a
 restore is waiting on Glacier, the job is not lost. GlacierVault records
-the S3 Batch job ID the moment the warmup tool submits it; on startup,
+the S3 Batch job ID the moment the warmup tool submits it (GlacierVault sets
+`RUST_LOG=info` for the tool because its job-ID line is logged at info level
+and env_logger's default is error — without that the ID would never be
+captured); on startup,
 interrupted jobs are triaged automatically — jobs that never submitted a
 Batch job are marked failed (safe to retry), while jobs with a recorded
 Batch job ID **resume**: the server re-attaches to the in-flight Batch job
@@ -100,9 +103,11 @@ longer than the copy lifetime still needs a fresh restore.)
 > fail on packs that were never thawed. Single-batch restores (≤ 1000
 > packs) are unaffected — the single recorded job covers the whole warmup.
 > If you hit this, start a new restore for the same snapshot and paths:
-> the warmup tool re-checks every pack and only re-requests the still-cold
-> ones, so already-thawed batches are picked up, not re-thawed (their
-> copies stay valid until their per-batch expiry).
+> the warmup tool submits a Batch job for all keys in each batch, but that
+> is safe to repeat: already-thawed packs are not re-thawed (their restored
+> copies stay valid until their per-batch expiry, which the re-request
+> aligns/extends), and packs still thawing report RestoreAlreadyInProgress
+> (HTTP 409), which the tool treats as recoverable and keeps waiting on.
 
 ### Warm-up sizing: batches, copy expiry, and timeout
 
@@ -139,7 +144,16 @@ log:
    every later batch takes the full 48 h Bulk SLA; `DL` covers the download
    on a slow link; `+1` is the AWS minimum.
 5. **Overall timeout:** `72·N + 24·(DL+1)` hours (72 h per batch: 3 wrapper
-   attempts × 24 h SQS watch budget, plus download headroom).
+   attempts × 24 h SQS watch budget, plus download headroom). The per-attempt
+   budget is `expiration_in_days × 24 h` — the tool offers no separate watch
+   knob, so the 48 h Bulk SLA is covered by *attempts*, not by a longer
+   single watch (a longer single watch would also lengthen the copy
+   lifetime, which we keep minimal). Verified against the
+   warmup-s3-archives 1.3.0 source: each retry submits a fresh Batch job
+   for the batch's keys, `RestoreAlreadyInProgress` is treated as
+   recoverable, and still-thawing packs are genuinely re-waited for a fresh
+   full budget rather than short-circuiting. Each retry costs one more S3
+   Batch job (~$0.25 per 1000-pack batch).
 
 Worked examples (full 1000-pack batches, default 1080 GB/day):
 
@@ -157,11 +171,11 @@ the last batch only covers its own download.
 
 > **Needs further consideration and testing.** The 48 h-per-batch SLA
 > bound and the sequential-batch behavior are verified against rustic's
-> warm-up implementation, but no multi-batch (1000+ pack) restore has been
-> run end-to-end yet: the per-batch expiry rewrite, the SQS budget
-> interaction (`expiration_in_days × 24 h` per tool invocation), and the
-> batch-counter recovery across a container restart all need a live
-> multi-batch run to confirm. The download-rate default (1080 GB/day ≈
+> warm-up implementation, and the retry/wait interaction is verified
+> against the warmup-s3-archives 1.3.0 source — but no multi-batch (1000+
+> pack) restore has been run end-to-end yet: the per-batch expiry rewrite
+> and the batch-counter recovery across a container restart still need a
+> live multi-batch run to confirm. The download-rate default (1080 GB/day ≈
 > 100 Mbit/s) is a reasonable starting point, not a measurement — check your
 > actual restore throughput and tune it.
 > Until then, treat the table above as the design intent, not a proven
