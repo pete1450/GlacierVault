@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"time"
 
 	"golang.org/x/crypto/bcrypt"
 
@@ -68,6 +69,16 @@ func main() {
 	// jobs that recorded an S3 Batch job ID resume waiting on it, the rest
 	// are marked failed (safe to retry). Runs async; never blocks startup.
 	go restoreMgr.ReconcileInterruptedJobs(context.Background())
+
+	// Backup jobs interrupted by a container restart or crash (e.g. OOM)
+	// can never finish: the goroutine running rustic died with the
+	// container, leaving the row stuck at 'running' with no logs. Mark them
+	// failed; rustic backups are incremental, so retrying is always safe.
+	if _, err := database.Exec(`UPDATE backup_jobs SET status='failed', completed_at=?, error_message=? WHERE status='running'`,
+		time.Now().UTC(),
+		"Interrupted by container restart or crash before completion. Backups are incremental — safe to retry."); err != nil {
+		log.Printf("reconcile interrupted backup jobs: %v", err)
+	}
 
 	sched := scheduler.New(database, eng, cat, notifyMgr)
 	if err := sched.Start(context.Background()); err != nil {

@@ -44,13 +44,19 @@ Deep Archive bills **$0.05 per 1,000 PUTs** and **~40 KB of overhead per
 object**. Storing 1 TB as 4 MiB objects means 262,144 PUTs (**$13.11**) and
 ~10 GB of billed overhead. Storing it as 512 MiB packs means 2,048 PUTs
 (**$0.10**) and ~80 MB of overhead. New repositories are initialized with
-**512 MiB data packs / 32 MiB tree packs** (rustic grows these automatically
-as the repo grows).
+**512 MiB data packs / 32 MiB tree packs**, and backups pin the pack-size
+*limits* to those same values: left alone, rustic's grow factor would push
+packs toward ~4 GiB as the repo grows, and since rustic buffers whole packs
+(several in parallel) during backup, that is enough to OOM-kill the
+container on a memory-constrained machine. The cap bounds peak backup
+memory while keeping the large-pack benefits.
 
 The honest trade-off, stated in the code: higher memory use during backup
 (rustic buffers whole packs, several in parallel) and **coarser partial
 restores** — retrieving a 1 KB file still thaws its entire 512 MiB pack.
-For a vault, that's the right trade.
+For a vault, that's the right trade. If backups still OOM on a very small
+machine, the remaining lever is lowering the pack-size targets (and
+accepting more objects).
 
 ### Why Bulk retrieval by default
 
