@@ -1,5 +1,4 @@
 'use client'
-import Image from 'next/image'
 import Link from 'next/link'
 import { useRouter, usePathname } from 'next/navigation'
 import { logout } from '@/lib/api'
@@ -25,7 +24,11 @@ export default function Nav() {
   return (
     <nav className="border-b border-gray-800 px-6 py-4 flex items-center justify-between">
       <span className="flex items-center gap-2">
-        <Image src="/icon.png" alt="GlacierVault logo" width={28} height={28} className="rounded-md" />
+        {/* Plain img: this is a static export served by Go's FileServer —
+            there is no next/image optimization endpoint, so the Image
+            component's /_next/image URLs 404. public/logo.png is the
+            full-resolution artwork; the browser downscales it. */}
+        <img src="/logo.png" alt="GlacierVault logo" width={28} height={28} className="rounded-md" />
         <span className="font-bold text-lg text-white">GlacierVault</span>
       </span>
       <div className="flex items-center gap-4 text-sm text-gray-400">
