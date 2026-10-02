@@ -80,6 +80,7 @@ func (s *Server) Router() http.Handler {
 		r.Get("/api/jobs", s.handleListJobs)
 		r.Get("/api/jobs/{id}", s.handleGetJob)
 		r.Get("/api/jobs/{id}/stream", s.handleStreamJob)
+		r.Post("/api/jobs/{id}/cancel", s.handleCancelJob)
 
 		// Snapshots.
 		r.Get("/api/snapshots", s.handleListSnapshots)
@@ -656,28 +657,40 @@ func (s *Server) handleRunBackupNow(w http.ResponseWriter, r *http.Request) {
 	paths := parseJSONStringArray(sourcePaths)
 
 	go func() {
-		ctx := context.Background()
+		ctx, cancel := context.WithCancel(context.Background())
+		engine.RegisterCancel(jobID, cancel)
+		defer engine.UnregisterCancel(jobID)
+
 		err := s.Engine.RunBackup(ctx, buf, paths, []string{name}, compressionLevel)
-		status, errMsg := "completed", ""
-		if err != nil {
-			status, errMsg = "failed", err.Error()
-		}
 		logText := strings.Join(buf.Lines(), "\n")
-		s.DB.ExecContext(ctx, `UPDATE backup_jobs SET status=?, completed_at=?, error_message=?, log_output=? WHERE id=?`,
-			status, time.Now().UTC(), errMsg, logText, jobID)
-		if err == nil {
-			if s.Notify != nil {
-				s.Notify.BackupCompleted(name)
+		// Use a fresh context: ours may have been cancelled via the API.
+		// The status guard keeps a concurrent cancel ('cancelled') from
+		// being overwritten by this completion update.
+		dbCtx := context.Background()
+		if err != nil {
+			res, _ := s.DB.ExecContext(dbCtx, `UPDATE backup_jobs SET status='failed', completed_at=?, error_message=?, log_output=? WHERE id=? AND status='running'`,
+				time.Now().UTC(), err.Error(), logText, jobID)
+			if n, _ := res.RowsAffected(); n == 0 {
+				return // cancelled via API; status already recorded
 			}
-			if syncErr := s.Catalog.SyncAfterBackup(ctx, defID); syncErr != nil {
-				// Surface catalog sync failures on the job record — a silent
-				// failure here is what made snapshots never appear in the UI.
-				msg := fmt.Sprintf("catalog sync failed: %v", syncErr)
-				buf.Write("[error] " + msg)
-				logText = strings.Join(buf.Lines(), "\n")
-				s.DB.ExecContext(ctx, `UPDATE backup_jobs SET error_message=?, log_output=? WHERE id=?`,
-					msg, logText, jobID)
-			}
+			return
+		}
+		res, _ := s.DB.ExecContext(dbCtx, `UPDATE backup_jobs SET status='completed', completed_at=?, error_message=?, log_output=? WHERE id=? AND status='running'`,
+			time.Now().UTC(), "", logText, jobID)
+		if n, _ := res.RowsAffected(); n == 0 {
+			return // cancelled via API; status already recorded
+		}
+		if s.Notify != nil {
+			s.Notify.BackupCompleted(name)
+		}
+		if syncErr := s.Catalog.SyncAfterBackup(dbCtx, defID); syncErr != nil {
+			// Surface catalog sync failures on the job record — a silent
+			// failure here is what made snapshots never appear in the UI.
+			msg := fmt.Sprintf("catalog sync failed: %v", syncErr)
+			buf.Write("[error] " + msg)
+			logText = strings.Join(buf.Lines(), "\n")
+			s.DB.ExecContext(dbCtx, `UPDATE backup_jobs SET error_message=?, log_output=? WHERE id=?`,
+				msg, logText, jobID)
 		}
 	}()
 
@@ -738,6 +751,34 @@ func (s *Server) handleGetJob(w http.ResponseWriter, r *http.Request) {
 		"completedAt": nullTimeStr(completedAt), "status": status,
 		"bytesTransferred": bytes, "errorMessage": errMsg.String, "logOutput": logOutput.String,
 	})
+}
+
+// handleCancelJob kills an in-progress backup job: the rustic child process
+// is terminated via its context (same as a crash — uploaded packs stay,
+// no snapshot is written, and the next backup re-uploads what the killed
+// run never indexed). The row is marked 'cancelled' first so the backup
+// goroutine's guarded completion update can't overwrite it.
+func (s *Server) handleCancelJob(w http.ResponseWriter, r *http.Request) {
+	id, _ := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if !engine.HasCancel(id) {
+		writeError(w, http.StatusConflict, "job is not running or cannot be cancelled")
+		return
+	}
+	// Mark first, kill second: the backup goroutine's completion update is
+	// guarded by status='running', so it can't overwrite 'cancelled'.
+	res, err := s.DB.ExecContext(r.Context(),
+		`UPDATE backup_jobs SET status='cancelled', completed_at=?, error_message=? WHERE id=? AND status='running'`,
+		time.Now().UTC(), "Cancelled by user.", id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not record cancellation")
+		return
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		writeError(w, http.StatusConflict, "job already finished")
+		return
+	}
+	engine.CancelJob(id)
+	writeJSON(w, http.StatusOK, map[string]string{"status": "cancelled"})
 }
 
 // handleStreamJob streams live log lines as Server-Sent Events.

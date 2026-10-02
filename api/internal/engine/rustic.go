@@ -231,6 +231,13 @@ func (e *Engine) RunBackup(ctx context.Context, buf *RingBuffer, sourcePaths []s
 	args := []string{"backup",
 		"--set-datapack-size-limit", defaultDataPackSize,
 		"--set-treepack-size-limit", defaultTreePackSize,
+		// Parent snapshots are matched by label+paths only: the default
+		// also includes host, but Docker defaults the container hostname to
+		// the container ID, which changes on every recreate and would
+		// silently break incremental backups ("using no parent" → full
+		// re-scan). GlacierVault is single-container/single-writer, so host
+		// carries no useful signal here.
+		"--group-by", "label,paths",
 	}
 	for _, t := range tags {
 		args = append(args, "--tag", t)

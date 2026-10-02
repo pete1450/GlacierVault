@@ -19,6 +19,12 @@ Consequences:
 
 - **Incremental forever.** After the first backup, only changed chunks are
   uploaded. A daily backup of a quiet file server is a handful of packs.
+  Parent snapshots are matched by label+paths (not host: Docker's default
+  hostname is the container ID, which changes on every recreate and would
+  otherwise silently force a full re-scan). A running backup can be
+  cancelled from the Jobs page — killing it is crash-safe: uploaded packs
+  stay, no snapshot is written, and the next backup re-uploads what the
+  killed run never indexed.
 - **Cross-file and cross-snapshot dedup.** The same photo in two folders, or
   unchanged data across 30 daily snapshots, is stored once.
 - **Snapshots are cheap.** A snapshot is just a tree of references to chunks,

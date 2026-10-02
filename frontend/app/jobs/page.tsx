@@ -2,12 +2,13 @@
 
 import { useEffect, useRef, useState } from 'react'
 import Nav from '@/components/Nav'
-import { listJobs, getJob, type Job } from '@/lib/api'
+import { listJobs, getJob, cancelJob, type Job } from '@/lib/api'
 
 const STATUS_COLORS: Record<string, string> = {
   running: 'bg-blue-500/20 text-blue-300 border-blue-500/30',
   completed: 'bg-green-500/20 text-green-300 border-green-500/30',
   failed: 'bg-red-500/20 text-red-300 border-red-500/30',
+  cancelled: 'bg-gray-500/20 text-gray-300 border-gray-500/30',
 }
 
 function formatBytes(bytes: number) {
@@ -145,6 +146,19 @@ export default function JobsPage() {
 
   const runningCount = jobs.filter((j) => j.status === 'running').length
 
+  const handleCancel = async () => {
+    if (selectedJob == null || selectedJob.status !== 'running') return
+    if (!window.confirm(`Cancel backup job #${selectedJob.id}? Uploaded packs stay in the repo; the next backup re-uploads what this run never indexed.`)) return
+    try {
+      await cancelJob(selectedJob.id)
+      const j = await getJob(selectedJob.id).catch(() => null)
+      if (j) setSelectedJob(j)
+      fetchJobs()
+    } catch (e) {
+      alert(e instanceof Error ? e.message : 'Cancel failed')
+    }
+  }
+
   return (
     <div className="min-h-screen bg-gray-950 text-white">
       <Nav />
@@ -197,6 +211,14 @@ export default function JobsPage() {
                   <span className={`text-sm px-2.5 py-0.5 rounded border font-medium ${STATUS_COLORS[selectedJob.status] ?? ''}`}>
                     {selectedJob.status}
                   </span>
+                  {selectedJob.status === 'running' && (
+                    <button
+                      onClick={handleCancel}
+                      className="text-sm px-3 py-1 rounded border border-red-500/40 text-red-300 hover:bg-red-500/10 transition-colors"
+                    >
+                      Cancel
+                    </button>
+                  )}
                 </div>
 
                 {/* Stats grid */}
@@ -215,7 +237,7 @@ export default function JobsPage() {
                 </div>
 
                 {/* Error */}
-                {selectedJob.status === 'failed' && selectedJob.errorMessage && (
+                {(selectedJob.status === 'failed' || selectedJob.status === 'cancelled') && selectedJob.errorMessage && (
                   <div className="bg-red-500/10 border border-red-500/30 rounded p-4">
                     <p className="text-xs font-semibold text-red-400 mb-1">Error</p>
                     <p className="text-sm text-red-300 font-mono">{selectedJob.errorMessage}</p>

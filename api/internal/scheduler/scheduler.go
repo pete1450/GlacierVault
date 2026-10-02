@@ -149,6 +149,9 @@ func (s *Scheduler) runBackup(def BackupDef) {
 	}
 	jobID, _ := res.LastInsertId()
 
+	engine.RegisterCancel(jobID, cancel)
+	defer engine.UnregisterCancel(jobID)
+
 	buf := engine.GetBuffer(jobID)
 	buf.Write(fmt.Sprintf("Starting backup for %q", def.Name))
 
@@ -181,11 +184,17 @@ func (s *Scheduler) runBackup(def BackupDef) {
 		logLines += l + "\n"
 	}
 
-	s.db.ExecContext(ctx, `
+	// Fresh context: ours may have been cancelled via the API. The status
+	// guard keeps a concurrent cancel ('cancelled') from being overwritten.
+	dbCtx := context.Background()
+	res2, _ := s.db.ExecContext(dbCtx, `
 		UPDATE backup_jobs SET status=?, completed_at=?, error_message=?, log_output=?
-		WHERE id=?`,
+		WHERE id=? AND status='running'`,
 		status, time.Now().UTC(), errMsg, logLines, jobID,
 	)
+	if n, _ := res2.RowsAffected(); n == 0 {
+		return // cancelled via API; status already recorded
+	}
 
 	if status == "completed" && s.notify != nil {
 		s.notify.BackupCompleted(def.Name)
