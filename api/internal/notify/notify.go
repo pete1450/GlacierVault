@@ -191,7 +191,8 @@ func (m *Manager) BackupCompleted(backupName string) {
 }
 
 // WarmupCompleted notifies that Glacier finished thawing a restore's packs
-// (the S3 Batch restore job completed); the download phase starts next.
+// (the warmup tool confirmed every pack's restored copy is live); the
+// download phase starts next.
 func (m *Manager) WarmupCompleted(jobID int64, batchJobID string) {
 	m.notifyEvent(func(cfg Config) bool { return cfg.NotifyWarmupCompleted },
 		"GlacierVault warmup complete",

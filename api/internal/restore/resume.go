@@ -6,16 +6,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"os"
 	"regexp"
 	"strings"
 	"time"
 
-	"github.com/aws/aws-sdk-go-v2/aws"
-	awsconfig "github.com/aws/aws-sdk-go-v2/config"
-	"github.com/aws/aws-sdk-go-v2/credentials"
-	"github.com/aws/aws-sdk-go-v2/service/s3control"
-	"github.com/aws/aws-sdk-go-v2/service/s3control/types"
 	"github.com/glaciervault/api/internal/engine"
 )
 
@@ -43,17 +37,33 @@ func batchJobIDFromLine(line string) string {
 	return batchJobIDPattern.FindString(line)
 }
 
-// watchForBatchJobID returns the LineHook for a restore invocation: the
-// first line reporting the S3 Batch job ID persists it immediately, so a
-// later container restart can re-attach to the in-flight warmup instead of
-// submitting a duplicate Batch job. The update is idempotent (WHERE
-// batch_job_id IS NULL) and also advances the status honestly: the Batch
-// job now exists server-side, so retrieval is in progress.
-func (m *Manager) watchForBatchJobID(ctx context.Context, jobID int64) func(string) {
+// warmupCompleteSentinel is printed by the glaciervault-warmup wrapper when its
+// last batch exits 0 — i.e. every pack's restored copy is live (SQS-confirmed
+// by warmup-s3-archives). An S3 Batch restore job reporting Complete only
+// means restore *requests* were initiated, so the Batch job status is NOT a
+// thaw signal; this line is.
+const warmupCompleteSentinel = "glaciervault-warmup: warmup complete"
+
+// warmupLineHook returns the LineHook for a restore invocation. It records
+// the first S3 Batch job ID it sees (first-write-wins: later batches submit
+// their own jobs, but only the first ID is kept for debugging), and watches
+// for the wrapper's warmup-complete sentinel — the true end of the thaw.
+// On the sentinel the status advances honestly to retrieval_complete and the
+// warmup notification fires exactly once.
+func (m *Manager) warmupLineHook(ctx context.Context, jobID int64) func(string) {
+	var batchJobID string
 	return func(line string) {
+		if strings.Contains(line, warmupCompleteSentinel) {
+			m.setStatus(ctx, jobID, StatusRetrievalComplete, "")
+			m.notifyWarmupOnce(jobID, batchJobID)
+			return
+		}
 		id := batchJobIDFromLine(line)
 		if id == "" {
 			return
+		}
+		if batchJobID == "" {
+			batchJobID = id
 		}
 		res, err := m.db.ExecContext(ctx,
 			`UPDATE restore_jobs SET batch_job_id=?, status=?, retrieval_started_at=?
@@ -65,10 +75,6 @@ func (m *Manager) watchForBatchJobID(ctx context.Context, jobID int64) func(stri
 		}
 		if n, _ := res.RowsAffected(); n > 0 {
 			log.Printf("restore job %d: warmup Batch job %s", jobID, id)
-			// The warmup tool blocks on SQS now; this watcher tracks the same
-			// Batch job via DescribeJob purely to fire the warmup-complete
-			// notification when Glacier reports the packs thawed.
-			go m.watchWarmupForNotification(context.Background(), jobID, id)
 		}
 	}
 }
@@ -109,7 +115,7 @@ func (m *Manager) ReconcileInterruptedJobs(ctx context.Context) {
 			continue
 		}
 		resumed++
-		go m.resumeAfterRestart(context.Background(), id, batchJobID.String)
+		go m.resumeAfterRestart(context.Background(), id)
 	}
 	if err := rows.Err(); err != nil {
 		log.Printf("restore reconcile: rows: %v", err)
@@ -117,79 +123,6 @@ func (m *Manager) ReconcileInterruptedJobs(ctx context.Context) {
 	if interrupted+resumed > 0 {
 		log.Printf("restore reconcile: %d interrupted job(s) marked failed, %d warmup(s) resumed",
 			interrupted, resumed)
-	}
-}
-
-// batchControlClient builds an S3 Control client from the stored deployment
-// credentials, plus the warmup settings (account ID for DescribeJob).
-func (m *Manager) batchControlClient(ctx context.Context) (*s3control.Client, *warmupSettings, error) {
-	s, err := m.loadAWSSettings(ctx)
-	if err != nil {
-		return nil, nil, err
-	}
-	ws, err := m.loadWarmupSettings(ctx)
-	if err != nil {
-		return nil, nil, err
-	}
-	awsCfg, err := awsconfig.LoadDefaultConfig(ctx,
-		awsconfig.WithRegion(s.region),
-		awsconfig.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(s.accessKey, s.secretKey, "")),
-	)
-	if err != nil {
-		return nil, nil, fmt.Errorf("load AWS config: %w", err)
-	}
-	return s3control.NewFromConfig(awsCfg), ws, nil
-}
-
-// watchWarmupForNotification polls the S3 Batch job until it completes and
-// then fires the warmup-complete notification exactly once. It covers the
-// happy path (container alive); after a restart, resumeAfterRestart takes
-// over and calls notifyWarmupOnce itself. The dedupe column makes double
-// delivery impossible even if both somehow observe completion.
-func (m *Manager) watchWarmupForNotification(ctx context.Context, jobID int64, batchJobID string) {
-	ctl, ws, err := m.batchControlClient(ctx)
-	if err != nil {
-		log.Printf("restore job %d: warmup notify: %v", jobID, err)
-		return
-	}
-
-	// Fresh deadline: Bulk restores can take up to 48h from submission.
-	ctx, cancel := context.WithTimeout(ctx, restoreTimeout)
-	defer cancel()
-
-	ticker := time.NewTicker(5 * time.Minute)
-	defer ticker.Stop()
-	for {
-		// Stop once the job left the warmup phases (download done, failed,
-		// or cancelled) — nothing left to notify about.
-		var status string
-		if err := m.db.QueryRowContext(ctx, `SELECT status FROM restore_jobs WHERE id=?`, jobID).Scan(&status); err == nil {
-			switch status {
-			case StatusCompleted, StatusFailed:
-				return
-			}
-		}
-		out, err := ctl.DescribeJob(ctx, &s3control.DescribeJobInput{
-			AccountId: aws.String(ws.accountID),
-			JobId:     aws.String(batchJobID),
-		})
-		if err != nil {
-			log.Printf("restore job %d: warmup notify DescribeJob %s: %v", jobID, batchJobID, err)
-		} else {
-			switch out.Job.Status {
-			case types.JobStatusComplete:
-				m.notifyWarmupOnce(jobID, batchJobID)
-				return
-			case types.JobStatusFailed, types.JobStatusCancelled:
-				// The restore itself reports the failure; no warmup notification.
-				return
-			}
-		}
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-		}
 	}
 }
 
@@ -213,93 +146,33 @@ func (m *Manager) notifyWarmupOnce(jobID int64, batchJobID string) {
 	m.notify.WarmupCompleted(jobID, batchJobID)
 }
 
-// resumeAfterRestart re-attaches to the S3 Batch restore job recorded in
-// batch_job_id and, once Glacier reports the packs restored, runs the
-// download phase (plain rustic restore, no warmup step needed).
-func (m *Manager) resumeAfterRestart(ctx context.Context, jobID int64, batchJobID string) {
+// resumeAfterRestart re-runs a restore interrupted by a container restart by
+// simply running the happy path again. The warmup is idempotent:
+// already-thawed packs are skipped (their restored-copy expiry is just
+// extended) and the wrapper re-submits Batch jobs for the rest, so every
+// batch is (re-)submitted and the sentinel-based completion detection works
+// exactly as on the first attempt.
+//
+// (The previous code polled the S3 Batch job status and started the
+// download when the job reported Complete — but a Batch restore job reports
+// Complete when restore *requests* are initiated, not when objects are
+// thawed, so a restart during the thaw wait raced the download against
+// Glacier and failed. It also lost unsubmitted later batches on multi-batch
+// restores; re-running the warmup fixes that too.)
+func (m *Manager) resumeAfterRestart(ctx context.Context, jobID int64) {
 	buf := engine.GetBuffer(jobID)
-	buf.Write(fmt.Sprintf("[restore] container restarted during warmup — re-attached to S3 Batch job %s", batchJobID))
+	buf.Write("[restore] container restarted during restore — re-running warmup (already-thawed packs are skipped) then downloading")
 
-	ctl, ws, err := m.batchControlClient(ctx)
-	if err != nil {
-		m.setStatus(ctx, jobID, StatusFailed, fmt.Sprintf("resume after restart: %v", err))
-		return
-	}
-
-	// Fresh deadline for the resumed wait: Bulk restores can take up to 48h
-	// from submission. Poll DescribeJob (stateless — safe across restarts).
-	ctx, cancel := context.WithTimeout(ctx, restoreTimeout)
-	defer cancel()
-
-	ticker := time.NewTicker(5 * time.Minute)
-	defer ticker.Stop()
-	var consecutiveErrors int
-	for {
-		out, err := ctl.DescribeJob(ctx, &s3control.DescribeJobInput{
-			AccountId: aws.String(ws.accountID),
-			JobId:     aws.String(batchJobID),
-		})
-		if err != nil {
-			consecutiveErrors++
-			log.Printf("restore job %d: DescribeJob %s: %v (%d consecutive)", jobID, batchJobID, err, consecutiveErrors)
-			if consecutiveErrors >= 24 {
-				m.setStatus(ctx, jobID, StatusFailed,
-					fmt.Sprintf("lost track of S3 Batch job %s: %v (check the job in the AWS console)", batchJobID, err))
-				return
-			}
-		} else {
-			consecutiveErrors = 0
-			switch out.Job.Status {
-			case types.JobStatusComplete:
-				m.setStatus(ctx, jobID, StatusRetrievalComplete, "")
-				m.notifyWarmupOnce(jobID, batchJobID)
-				buf.Write("[restore] Glacier retrieval complete — downloading packs")
-				m.downloadAfterWarmup(ctx, jobID, buf)
-				return
-			case types.JobStatusFailed, types.JobStatusCancelled:
-				reason := string(out.Job.Status)
-				if out.Job.StatusUpdateReason != nil {
-					reason = *out.Job.StatusUpdateReason
-				}
-				m.setStatus(ctx, jobID, StatusFailed,
-					fmt.Sprintf("S3 Batch restore job %s ended as %s — start a new restore to retry", batchJobID, reason))
-				return
-			default:
-				// Active, Cancelling, etc. — keep waiting.
-				buf.Write(fmt.Sprintf("[restore] Batch job %s: %s", batchJobID, out.Job.Status))
-			}
-		}
-		select {
-		case <-ctx.Done():
-			m.setStatus(ctx, jobID, StatusFailed,
-				"resumed warmup wait timed out — start a new restore to retry")
-			return
-		case <-ticker.C:
-		}
-	}
-}
-
-// downloadAfterWarmup runs the download phase of a restore whose packs are
-// already thawed: plain rustic restore with no warm-up step, through the
-// CloudFront proxy profile when enabled.
-func (m *Manager) downloadAfterWarmup(ctx context.Context, jobID int64, buf *engine.RingBuffer) {
 	var snapshotRowID sql.NullInt64
 	var pathsJSON, destination string
-	err := m.db.QueryRowContext(ctx,
+	if err := m.db.QueryRowContext(ctx,
 		`SELECT snapshot_id, requested_paths, destination FROM restore_jobs WHERE id=?`, jobID,
-	).Scan(&snapshotRowID, &pathsJSON, &destination)
-	if err != nil {
+	).Scan(&snapshotRowID, &pathsJSON, &destination); err != nil {
 		m.setStatus(ctx, jobID, StatusFailed, fmt.Sprintf("resume: load job: %v", err))
 		return
 	}
 	if !snapshotRowID.Valid {
-		m.setStatus(ctx, jobID, StatusFailed, "resume: snapshot was deleted; cannot download")
-		return
-	}
-	var rusticID string
-	if err := m.db.QueryRowContext(ctx,
-		`SELECT snapshot_id FROM snapshots WHERE id=?`, snapshotRowID.Int64).Scan(&rusticID); err != nil {
-		m.setStatus(ctx, jobID, StatusFailed, fmt.Sprintf("resume: lookup snapshot: %v", err))
+		m.setStatus(ctx, jobID, StatusFailed, "resume: snapshot was deleted; cannot restore")
 		return
 	}
 	var paths []string
@@ -307,32 +180,12 @@ func (m *Manager) downloadAfterWarmup(ctx context.Context, jobID int64, buf *eng
 		m.setStatus(ctx, jobID, StatusFailed, fmt.Sprintf("resume: parse requested paths: %v", err))
 		return
 	}
-	env, err := m.awsEnv(ctx)
-	if err != nil {
-		m.setStatus(ctx, jobID, StatusFailed, fmt.Sprintf("resume: %v", err))
-		return
+	// Clear the recorded Batch job so this attempt records its own.
+	if _, err := m.db.ExecContext(ctx, `UPDATE restore_jobs SET batch_job_id=NULL WHERE id=?`, jobID); err != nil {
+		log.Printf("restore job %d: resume clear batch job id: %v", jobID, err)
 	}
-	workDir, err := m.writeWarmupConfig(ctx, jobID, WarmupPlan{Batches: 1})
-	if err != nil {
-		m.setStatus(ctx, jobID, StatusFailed, fmt.Sprintf("resume: %v", err))
-		return
-	}
-	defer os.RemoveAll(workDir)
-
-	m.setStatus(ctx, jobID, StatusRestoring, "")
-	if err := m.engine.RunRestore(ctx, buf, rusticID, destination, paths, engine.RestoreOptions{
-		Warmup:     false,
-		Env:        env,
-		Dir:        workDir,
-		ConfigPath: m.cfRestoreProfile(ctx, buf, workDir),
-	}); err != nil {
-		m.setStatus(ctx, jobID, StatusFailed,
-			fmt.Sprintf("download after warmup: %v (if the restored copies expired, start a new restore to warm the packs again)", err))
-		return
-	}
-	m.db.ExecContext(ctx, `UPDATE restore_jobs SET completed_at=? WHERE id=?`, time.Now().UTC(), jobID)
-	m.setStatus(ctx, jobID, StatusCompleted, "")
-	if m.notify != nil {
-		m.notify.RestoreCompleted(jobID)
+	if err := m.run(ctx, jobID, snapshotRowID.Int64, paths, destination); err != nil {
+		log.Printf("restore job %d: resumed run failed: %v", jobID, err)
+		m.setStatus(ctx, jobID, StatusFailed, err.Error())
 	}
 }

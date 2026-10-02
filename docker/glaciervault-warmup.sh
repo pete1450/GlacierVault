@@ -108,6 +108,14 @@ while [ "$attempt" -le "$MAX_ATTEMPTS" ]; do
     status=${PIPESTATUS[0]}
     if [ "$status" -eq 0 ]; then
         rm -f "$tmp"
+        if [ "$BATCH" -ge "$TOTAL_BATCHES" ]; then
+            # True warmup completion: every batch thawed (SQS-confirmed by the
+            # tool). Note an S3 Batch restore job reporting Complete only
+            # means restore *requests* were initiated — this line is the real
+            # signal. GlacierVault watches for it to fire the warmup
+            # notification and mark retrieval complete.
+            echo "glaciervault-warmup: warmup complete — all $TOTAL_BATCHES batch(es) thawed; download starting"
+        fi
         exit 0
     fi
     if grep -q "Timed out waiting for" "$tmp"; then
