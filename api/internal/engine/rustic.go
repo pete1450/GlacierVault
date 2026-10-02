@@ -220,8 +220,18 @@ func (e *Engine) InitRepository(ctx context.Context, buf *RingBuffer) error {
 // RunBackup executes rustic backup and streams output to buf.
 // compressionLevel is a zstd level (1-22); values outside that range are
 // ignored and rustic's default applies.
+//
+// Pack-size limits are pinned to the init targets: without them rustic's
+// grow factor pushes packs toward ~4 GiB as the repository grows, and
+// rustic buffers whole packs (several in parallel) during backup —
+// enough to OOM-kill the container on a memory-constrained machine.
+// Capping at the configured targets bounds peak backup memory while
+// keeping the large-pack benefits (fewer PUTs, less per-object overhead).
 func (e *Engine) RunBackup(ctx context.Context, buf *RingBuffer, sourcePaths []string, tags []string, compressionLevel int) error {
-	args := []string{"backup"}
+	args := []string{"backup",
+		"--set-datapack-size-limit", defaultDataPackSize,
+		"--set-treepack-size-limit", defaultTreePackSize,
+	}
 	for _, t := range tags {
 		args = append(args, "--tag", t)
 	}
