@@ -13,7 +13,6 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -495,7 +494,7 @@ func (s *Server) handleListBackups(w http.ResponseWriter, r *http.Request) {
 		results = append(results, map[string]interface{}{
 			"id": id, "name": name, "sourcePaths": sourcePaths, "schedule": schedule,
 			"compressionLevel": compressionLevel,
-			"enabled": enabled == 1, "createdAt": createdAt,
+			"enabled":          enabled == 1, "createdAt": createdAt,
 		})
 	}
 	if results == nil {
@@ -560,7 +559,7 @@ func (s *Server) handleGetBackup(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"id": id, "name": name, "sourcePaths": sourcePaths, "schedule": schedule,
 		"compressionLevel": compressionLevel,
-		"enabled": enabled == 1, "createdAt": createdAt,
+		"enabled":          enabled == 1, "createdAt": createdAt,
 	})
 }
 
@@ -909,68 +908,13 @@ func (s *Server) handleSnapshotFiles(w http.ResponseWriter, r *http.Request) {
 		norm = strings.Trim(prefix, "/") + "/"
 	}
 
-	query := `SELECT path, size, mtime, is_dir FROM file_index WHERE snapshot_id=? ORDER BY path LIMIT 5000`
-	rows, err := s.DB.QueryContext(r.Context(), query, snapshotRowID)
+	children, err := listSnapshotChildren(r.Context(), s.DB, snapshotRowID, norm)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	defer rows.Close()
-	type child struct {
-		path      string
-		size      int64
-		mtime     string
-		isDir     bool
-		synthetic bool // derived from a deeper path, no real index row
-	}
-	byPath := map[string]*child{}
-	var order []string
-	for rows.Next() {
-		var path, mtime string
-		var size int64
-		var isDir int
-		rows.Scan(&path, &size, &mtime, &isDir)
-		p := strings.TrimPrefix(path, "/")
-		if !strings.HasPrefix(p, norm) {
-			continue
-		}
-		rel := strings.TrimPrefix(p, norm)
-		if rel == "" {
-			continue
-		}
-		c := &child{}
-		if i := strings.Index(rel, "/"); i >= 0 {
-			// Deeper than one level: show the immediate subdirectory.
-			c.path = norm + rel[:i]
-			c.isDir = true
-			c.synthetic = true
-		} else {
-			c.path = norm + rel
-			c.size = size
-			c.mtime = mtime
-			c.isDir = isDir == 1
-		}
-		if existing, ok := byPath[c.path]; ok {
-			// Prefer a real index row over a synthesized directory entry.
-			if existing.synthetic && !c.synthetic {
-				*existing = *c
-			}
-			continue
-		}
-		byPath[c.path] = c
-		order = append(order, c.path)
-	}
-	// Directories first, then alphabetical, as before.
-	sort.SliceStable(order, func(i, j int) bool {
-		a, b := byPath[order[i]], byPath[order[j]]
-		if a.isDir != b.isDir {
-			return a.isDir
-		}
-		return a.path < b.path
-	})
 	var files []map[string]interface{}
-	for _, p := range order {
-		c := byPath[p]
+	for _, c := range children {
 		files = append(files, map[string]interface{}{
 			"path": c.path, "size": c.size, "mtime": c.mtime, "isDir": c.isDir,
 		})
@@ -979,6 +923,64 @@ func (s *Server) handleSnapshotFiles(w http.ResponseWriter, r *http.Request) {
 		files = []map[string]interface{}{}
 	}
 	writeJSON(w, http.StatusOK, files)
+}
+
+// snapshotChild is one immediate child of a browsed snapshot prefix.
+type snapshotChild struct {
+	path  string
+	size  int64
+	mtime string
+	isDir bool
+}
+
+// listSnapshotChildren returns the immediate children of norm ("" for the
+// snapshot root), directories first then alphabetical. Grouping happens in
+// SQL so the LIMIT applies per folder, not per snapshot.
+func listSnapshotChildren(ctx context.Context, db *sql.DB, snapshotRowID int64, norm string) ([]snapshotChild, error) {
+	// The path range is BINARY (case-sensitive) and uses the
+	// (snapshot_id, path) index. A child is a dir when its own row says so
+	// or when deeper paths were collapsed into it (single-array `rustic ls`
+	// output has no dir rows).
+	off := len(norm) + 1 // 1-based start of the remainder after norm
+	query := `
+	SELECT
+		child_path AS path,
+		MAX(CASE WHEN path = child_path THEN is_dir ELSE 1 END) AS is_dir,
+		MAX(CASE WHEN path = child_path THEN size ELSE 0 END) AS size,
+		MAX(CASE WHEN path = child_path THEN COALESCE(mtime, '') ELSE '' END) AS mtime
+	FROM (
+		SELECT path, size, mtime, is_dir,
+			CASE WHEN instr(substr(path, ?), '/') > 0
+				THEN substr(path, 1, ? + instr(substr(path, ?), '/') - 2)
+				ELSE path END AS child_path
+		FROM file_index
+		WHERE snapshot_id = ?
+			AND path >= ?
+			AND path < ? || char(1114111)
+			AND substr(path, 1, 1) != '/'
+	)
+	GROUP BY child_path
+	ORDER BY is_dir DESC, child_path
+	LIMIT 5000`
+	rows, err := db.QueryContext(ctx, query, off, off, off, snapshotRowID, norm, norm)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var children []snapshotChild
+	for rows.Next() {
+		var c snapshotChild
+		var isDir int
+		if err := rows.Scan(&c.path, &isDir, &c.size, &c.mtime); err != nil {
+			return nil, err
+		}
+		c.isDir = isDir == 1
+		children = append(children, c)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return children, nil
 }
 
 // handleDeleteSnapshot removes a snapshot from the repository via
