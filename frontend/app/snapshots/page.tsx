@@ -1,9 +1,9 @@
 'use client'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import Nav from '@/components/Nav'
 import {
-  listSnapshots, listSnapshotFiles, initiateRestore, deleteSnapshot,
+  listSnapshots, getSnapshotFiles, initiateRestore, deleteSnapshot,
   getStorage, pruneRepo,
   type Snapshot, type FileEntry, type StorageInfo,
 } from '@/lib/api'
@@ -23,6 +23,8 @@ export default function SnapshotsPage() {
   const [confirmPrune, setConfirmPrune] = useState(false)
   const [busy, setBusy] = useState(false)
   const [notice, setNotice] = useState('')
+  const [indexing, setIndexing] = useState<{ phase: string; done: number; total: number } | null>(null)
+  const loadToken = useRef(0)
 
   function refresh() {
     listSnapshots().then(setSnapshots).catch(() => {})
@@ -31,20 +33,42 @@ export default function SnapshotsPage() {
 
   useEffect(refresh, [])
 
+  // Loads a file listing, polling while the server builds the snapshot's
+  // file index in the background (202 responses). The token discards stale
+  // results when the user clicks another snapshot mid-poll.
+  async function loadFiles(snapId: number, p: string) {
+    const t = ++loadToken.current
+    setIndexing(null)
+    setFiles([])
+    for (;;) {
+      if (loadToken.current !== t) return
+      const res = await getSnapshotFiles(snapId, p).catch(() => null)
+      if (loadToken.current !== t) return
+      if (res == null) {
+        setIndexing(null)
+        return
+      }
+      if (res.status === 'ready') {
+        setIndexing(null)
+        setFiles(res.files)
+        return
+      }
+      setIndexing({ phase: res.phase, done: res.done, total: res.total })
+      await new Promise(r => setTimeout(r, 2000))
+    }
+  }
+
   async function openSnapshot(snap: Snapshot) {
     setSelected(snap)
     setPrefix('')
-    setFiles([])
     setChecked([])
-    const entries = await listSnapshotFiles(snap.id).catch(() => [])
-    setFiles(entries)
+    loadFiles(snap.id, '')
   }
 
   async function navigatePrefix(p: string) {
     if (!selected) return
     setPrefix(p)
-    const entries = await listSnapshotFiles(selected.id, p).catch(() => [])
-    setFiles(entries)
+    loadFiles(selected.id, p)
   }
 
   function togglePath(path: string) {
@@ -240,7 +264,26 @@ export default function SnapshotsPage() {
                   ))}
                 </tbody>
               </table>
-              {files.length === 0 && <p className="text-center text-gray-500 py-8 text-sm">Empty directory.</p>}
+              {files.length === 0 && !indexing && <p className="text-center text-gray-500 py-8 text-sm">Empty directory.</p>}
+              {indexing && (
+                <div className="text-center py-10 space-y-3">
+                  <p className="text-sm text-gray-300">
+                    {indexing.phase === 'indexing' ? 'Indexing snapshot files…' : 'Discovering snapshot files…'}
+                  </p>
+                  <p className="text-xs text-gray-500">
+                    {indexing.done.toLocaleString()} of {indexing.total > 0 ? indexing.total.toLocaleString() : '…'} files
+                  </p>
+                  {indexing.total > 0 && (
+                    <div className="mx-auto max-w-md h-2 bg-gray-800 rounded-full overflow-hidden">
+                      <div
+                        className="h-full bg-blue-500 transition-all"
+                        style={{ width: `${Math.min(100, (indexing.done / indexing.total) * 100).toFixed(1)}%` }}
+                      />
+                    </div>
+                  )}
+                  <p className="text-xs text-gray-600">First browse of a snapshot builds its file index — one-time per snapshot.</p>
+                </div>
+              )}
             </div>
 
             {/* Restore */}

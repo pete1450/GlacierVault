@@ -877,12 +877,23 @@ func (s *Server) handleSnapshotFiles(w http.ResponseWriter, r *http.Request) {
 	snapshotRowID, _ := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
 	prefix := r.URL.Query().Get("prefix")
 
-	// Lazy index if not yet populated.
+	// Lazy index on first browse — in the background, so the UI can show
+	// progress instead of hanging on one long request. The total comes from
+	// snapshots.file_count (0 = unknown → indeterminate progress).
 	var rusticID string
-	s.DB.QueryRowContext(r.Context(), `SELECT snapshot_id FROM snapshots WHERE id=?`, snapshotRowID).Scan(&rusticID)
-	if rusticID != "" {
-		if err := s.Catalog.IndexSnapshot(r.Context(), snapshotRowID, rusticID); err != nil {
+	var fileCount sql.NullInt64
+	s.DB.QueryRowContext(r.Context(), `SELECT snapshot_id, file_count FROM snapshots WHERE id=?`, snapshotRowID).Scan(&rusticID, &fileCount)
+	if indexed, _ := s.Catalog.IsIndexed(r.Context(), snapshotRowID); !indexed && rusticID != "" {
+		p := s.Catalog.EnsureIndexing(snapshotRowID, rusticID, fileCount.Int64)
+		phase, done, total, err, finished := p.Snapshot()
+		if err != nil {
 			writeError(w, http.StatusInternalServerError, fmt.Sprintf("index snapshot: %v", err))
+			return
+		}
+		if !finished {
+			writeJSON(w, http.StatusAccepted, map[string]interface{}{
+				"status": "indexing", "phase": phase, "done": done, "total": total,
+			})
 			return
 		}
 	}

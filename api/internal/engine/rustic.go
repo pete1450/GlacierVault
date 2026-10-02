@@ -355,6 +355,41 @@ func (e *Engine) ListFiles(ctx context.Context, snapshotID string) ([]FileEntry,
 	return entries, nil
 }
 
+// ListFilesStream runs `rustic ls --json` and invokes onEntry for each entry
+// as it is listed, so callers can report progress on large snapshots without
+// buffering the entire listing first. It handles the one-JSON-object-per-line
+// format; if the output turns out to be the single-array format it reports
+// streamed=false and the caller should fall back to ListFiles.
+func (e *Engine) ListFilesStream(ctx context.Context, snapshotID string, onEntry func(FileEntry)) (streamed bool, err error) {
+	sawArray := false
+	count := 0
+	_, err = e.runStreamingWithProfileHook(ctx, nil, nil, "",
+		strings.TrimSuffix(e.configPath, ".toml"),
+		func(line string) {
+			line = strings.TrimSpace(line)
+			if line == "" {
+				return
+			}
+			if strings.HasPrefix(line, "[") {
+				sawArray = true
+				return
+			}
+			var entry FileEntry
+			if err := json.Unmarshal([]byte(line), &entry); err != nil {
+				return
+			}
+			count++
+			onEntry(entry)
+		}, "ls", snapshotID, "--json")
+	if err != nil {
+		return false, err
+	}
+	if count == 0 && sawArray {
+		return false, nil
+	}
+	return true, nil
+}
+
 // pathsToEntries converts relative path strings into FileEntries. A path is
 // considered a directory when it is a strict prefix (path + "/") of another
 // path in the list.

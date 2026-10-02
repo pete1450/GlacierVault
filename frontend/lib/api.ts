@@ -47,8 +47,27 @@ export const cancelJob = (id: number) => req<{ status: string }>('POST', `/jobs/
 // Snapshots
 export const listSnapshots = () => req<Snapshot[]>('GET', '/snapshots')
 export const getSnapshot = (id: number) => req<Snapshot>('GET', `/snapshots/${id}`)
-export const listSnapshotFiles = (id: number, prefix?: string) =>
-  req<FileEntry[]>('GET', `/snapshots/${id}/files${prefix ? `?prefix=${encodeURIComponent(prefix)}` : ''}`)
+export type SnapshotFilesResult =
+  | { status: 'ready'; files: FileEntry[] }
+  | { status: 'indexing'; phase: string; done: number; total: number }
+
+// getSnapshotFiles handles the 202-indexing flow: the first browse of a
+// snapshot builds its file index in the background, so the server answers
+// 202 with progress until the file list is ready.
+export async function getSnapshotFiles(id: number, prefix?: string): Promise<SnapshotFilesResult> {
+  const q = prefix ? `?prefix=${encodeURIComponent(prefix)}` : ''
+  const res = await fetch(`${BASE}/snapshots/${id}/files${q}`, { credentials: 'include' })
+  if (res.status === 401) {
+    window.location.href = '/login'
+    throw new Error('Unauthorized')
+  }
+  const body = await res.json().catch(() => ({}))
+  if (res.status === 202) {
+    return { status: 'indexing', phase: body.phase ?? '', done: body.done ?? 0, total: body.total ?? 0 }
+  }
+  if (!res.ok) throw new Error(body.error || res.statusText)
+  return { status: 'ready', files: body as FileEntry[] }
+}
 export const deleteSnapshot = (id: number, prune = false) =>
   req<{ deleted: boolean; pruned: boolean; alreadyGone?: boolean }>('DELETE', `/snapshots/${id}${prune ? '?prune=true' : ''}`)
 
