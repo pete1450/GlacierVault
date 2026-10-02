@@ -63,46 +63,10 @@ func (c *Catalog) upsertSnapshot(ctx context.Context, s engine.Snapshot, backupD
 }
 
 // IndexSnapshot lazily populates the file_index for a snapshot on first browse.
+// It delegates to indexSnapshotWithProgress with no progress tracking; the
+// HTTP path uses EnsureIndexing for background progress instead.
 func (c *Catalog) IndexSnapshot(ctx context.Context, snapshotRowID int64, rusticSnapshotID string) error {
-	// Skip if already indexed.
-	var count int
-	row := c.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM file_index WHERE snapshot_id = ?`, snapshotRowID)
-	if err := row.Scan(&count); err != nil {
-		return err
-	}
-	if count > 0 {
-		return nil
-	}
-
-	entries, err := c.engine.ListFiles(ctx, rusticSnapshotID)
-	if err != nil {
-		return fmt.Errorf("list files: %w", err)
-	}
-
-	tx, err := c.db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-
-	stmt, err := tx.PrepareContext(ctx, `
-		INSERT INTO file_index (snapshot_id, path, size, mtime, is_dir) VALUES (?, ?, ?, ?, ?)
-	`)
-	if err != nil {
-		return err
-	}
-	defer stmt.Close()
-
-	for _, e := range entries {
-		isDir := 0
-		if e.Type == "dir" {
-			isDir = 1
-		}
-		if _, err := stmt.ExecContext(ctx, snapshotRowID, e.Path, e.Size, e.Mtime, isDir); err != nil {
-			return err
-		}
-	}
-	return tx.Commit()
+	return c.indexSnapshotWithProgress(ctx, snapshotRowID, rusticSnapshotID, nil)
 }
 
 // RebuildCatalog drops and re-syncs all snapshot metadata from the repository.

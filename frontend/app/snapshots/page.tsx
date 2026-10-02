@@ -1,9 +1,9 @@
 'use client'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import Nav from '@/components/Nav'
 import {
-  listSnapshots, listSnapshotFiles, initiateRestore, deleteSnapshot,
+  listSnapshots, getSnapshotFiles, initiateRestore, deleteSnapshot,
   getStorage, pruneRepo,
   type Snapshot, type FileEntry, type StorageInfo,
 } from '@/lib/api'
@@ -23,6 +23,11 @@ export default function SnapshotsPage() {
   const [confirmPrune, setConfirmPrune] = useState(false)
   const [busy, setBusy] = useState(false)
   const [notice, setNotice] = useState('')
+  const [indexing, setIndexing] = useState<{ phase: string; done: number; total: number } | null>(null)
+  const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(1000)
+  const [totalFiles, setTotalFiles] = useState(0)
+  const loadToken = useRef(0)
 
   function refresh() {
     listSnapshots().then(setSnapshots).catch(() => {})
@@ -31,20 +36,70 @@ export default function SnapshotsPage() {
 
   useEffect(refresh, [])
 
+  // Loads a file listing, polling while the server builds the snapshot's
+  // file index in the background (202 responses). The token discards stale
+  // results when the user clicks another snapshot mid-poll.
+  async function loadFiles(snapId: number, p: string, pg: number, ps: number) {
+    const t = ++loadToken.current
+    setIndexing(null)
+    setFiles([])
+    for (;;) {
+      if (loadToken.current !== t) return
+      const res = await getSnapshotFiles(snapId, p, ps, (pg - 1) * ps).catch(() => null)
+      if (loadToken.current !== t) return
+      if (res == null) {
+        setIndexing(null)
+        return
+      }
+      if (res.status === 'ready') {
+        setIndexing(null)
+        setFiles(res.files)
+        setTotalFiles(res.total)
+        return
+      }
+      setIndexing({ phase: res.phase, done: res.done, total: res.total })
+      await new Promise(r => setTimeout(r, 2000))
+    }
+  }
+
   async function openSnapshot(snap: Snapshot) {
     setSelected(snap)
     setPrefix('')
-    setFiles([])
     setChecked([])
-    const entries = await listSnapshotFiles(snap.id).catch(() => [])
-    setFiles(entries)
+    setPage(1)
+    loadFiles(snap.id, '', 1, pageSize)
   }
 
   async function navigatePrefix(p: string) {
     if (!selected) return
     setPrefix(p)
-    const entries = await listSnapshotFiles(selected.id, p).catch(() => [])
-    setFiles(entries)
+    setPage(1)
+    loadFiles(selected.id, p, 1, pageSize)
+  }
+
+  function changePage(pg: number) {
+    if (!selected || pg === page) return
+    setPage(pg)
+    loadFiles(selected.id, prefix, pg, pageSize)
+  }
+
+  function changePageSize(ps: number) {
+    if (!selected || ps === pageSize) return
+    setPageSize(ps)
+    setPage(1)
+    loadFiles(selected.id, prefix, 1, ps)
+  }
+
+  // Compact page-number items: 1 … p-1 p p+1 … N.
+  function pageItems(pg: number, totalPages: number): (number | '…')[] {
+    const keep = new Set([1, totalPages, pg - 1, pg, pg + 1])
+    const nums = [...keep].filter(n => n >= 1 && n <= totalPages).sort((a, b) => a - b)
+    const out: (number | '…')[] = []
+    nums.forEach((n, i) => {
+      if (i > 0 && n - nums[i - 1] > 1) out.push('…')
+      out.push(n)
+    })
+    return out
   }
 
   function togglePath(path: string) {
@@ -121,7 +176,7 @@ export default function SnapshotsPage() {
             <span className="font-semibold text-gray-200">Repository storage</span>
             <span><span className="font-bold text-white">{formatBytes(storage.totalBytes)}</span> <span className="text-gray-500">total</span></span>
             <span className="text-gray-500">{formatBytes(storage.packBytes)} in data packs · {formatBytes(storage.indexBytes)} index</span>
-            <span className="text-gray-500">{storage.snapshotCount} snapshots · {formatBytes(storage.logicalBytes)} logical size</span>
+            <span className="text-gray-500">{storage.snapshotCount} snapshots · {formatBytes(storage.logicalBytes)} latest snapshot</span>
             <button
               onClick={() => setConfirmPrune(true)}
               disabled={busy}
@@ -240,7 +295,66 @@ export default function SnapshotsPage() {
                   ))}
                 </tbody>
               </table>
-              {files.length === 0 && <p className="text-center text-gray-500 py-8 text-sm">Empty directory.</p>}
+              {!indexing && totalFiles > pageSize && (
+                <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3 text-sm border-t border-gray-800">
+                  <span className="text-gray-500">
+                    Showing {((page - 1) * pageSize + 1).toLocaleString()}–
+                    {Math.min(page * pageSize, totalFiles).toLocaleString()} of {totalFiles.toLocaleString()}
+                  </span>
+                  <div className="flex items-center gap-1.5">
+                    <select
+                      value={pageSize}
+                      onChange={e => changePageSize(Number(e.target.value))}
+                      className="bg-gray-800 text-gray-200 text-xs rounded px-2 py-1 mr-2"
+                    >
+                      {[250, 500, 1000, 2500].map(n => (
+                        <option key={n} value={n}>{n} / page</option>
+                      ))}
+                    </select>
+                    <button
+                      disabled={page === 1}
+                      onClick={() => changePage(page - 1)}
+                      className="px-2 py-1 rounded bg-gray-800 text-gray-300 text-xs disabled:opacity-40"
+                    >‹ Prev</button>
+                    {pageItems(page, Math.ceil(totalFiles / pageSize)).map((it, i) =>
+                      it === '…' ? (
+                        <span key={`e${i}`} className="text-gray-600 text-xs px-1">…</span>
+                      ) : (
+                        <button
+                          key={it}
+                          onClick={() => changePage(it)}
+                          className={`px-2 py-1 rounded text-xs ${it === page ? 'bg-blue-600 text-white' : 'bg-gray-800 text-gray-300'}`}
+                        >{it}</button>
+                      )
+                    )}
+                    <button
+                      disabled={page >= Math.ceil(totalFiles / pageSize)}
+                      onClick={() => changePage(page + 1)}
+                      className="px-2 py-1 rounded bg-gray-800 text-gray-300 text-xs disabled:opacity-40"
+                    >Next ›</button>
+                  </div>
+                </div>
+              )}
+              {files.length === 0 && !indexing && <p className="text-center text-gray-500 py-8 text-sm">Empty directory.</p>}
+              {indexing && (
+                <div className="text-center py-10 space-y-3">
+                  <p className="text-sm text-gray-300">
+                    {indexing.phase === 'indexing' ? 'Indexing snapshot files…' : 'Discovering snapshot files…'}
+                  </p>
+                  <p className="text-xs text-gray-500">
+                    {indexing.done.toLocaleString()} of {indexing.total > 0 ? indexing.total.toLocaleString() : '…'} files
+                  </p>
+                  {indexing.total > 0 && (
+                    <div className="mx-auto max-w-md h-2 bg-gray-800 rounded-full overflow-hidden">
+                      <div
+                        className="h-full bg-blue-500 transition-all"
+                        style={{ width: `${Math.min(100, (indexing.done / indexing.total) * 100).toFixed(1)}%` }}
+                      />
+                    </div>
+                  )}
+                  <p className="text-xs text-gray-600">First browse of a snapshot builds its file index — one-time per snapshot.</p>
+                </div>
+              )}
             </div>
 
             {/* Restore */}

@@ -47,8 +47,39 @@ export const cancelJob = (id: number) => req<{ status: string }>('POST', `/jobs/
 // Snapshots
 export const listSnapshots = () => req<Snapshot[]>('GET', '/snapshots')
 export const getSnapshot = (id: number) => req<Snapshot>('GET', `/snapshots/${id}`)
-export const listSnapshotFiles = (id: number, prefix?: string) =>
-  req<FileEntry[]>('GET', `/snapshots/${id}/files${prefix ? `?prefix=${encodeURIComponent(prefix)}` : ''}`)
+export type SnapshotFilesResult =
+  | { status: 'ready'; files: FileEntry[]; total: number; limit: number; offset: number }
+  | { status: 'indexing'; phase: string; done: number; total: number }
+
+// getSnapshotFiles handles the 202-indexing flow: the first browse of a
+// snapshot builds its file index in the background, so the server answers
+// 202 with progress until the file list is ready.
+export async function getSnapshotFiles(
+  id: number, prefix?: string, limit?: number, offset?: number,
+): Promise<SnapshotFilesResult> {
+  const params = new URLSearchParams()
+  if (prefix) params.set('prefix', prefix)
+  if (limit) params.set('limit', String(limit))
+  if (offset) params.set('offset', String(offset))
+  const q = params.toString() ? `?${params.toString()}` : ''
+  const res = await fetch(`${BASE}/snapshots/${id}/files${q}`, { credentials: 'include' })
+  if (res.status === 401) {
+    window.location.href = '/login'
+    throw new Error('Unauthorized')
+  }
+  const body = await res.json().catch(() => ({}))
+  if (res.status === 202) {
+    return { status: 'indexing', phase: body.phase ?? '', done: body.done ?? 0, total: body.total ?? 0 }
+  }
+  if (!res.ok) throw new Error(body.error || res.statusText)
+  return {
+    status: 'ready',
+    files: (body.files ?? []) as FileEntry[],
+    total: body.total ?? 0,
+    limit: body.limit ?? 0,
+    offset: body.offset ?? 0,
+  }
+}
 export const deleteSnapshot = (id: number, prune = false) =>
   req<{ deleted: boolean; pruned: boolean; alreadyGone?: boolean }>('DELETE', `/snapshots/${id}${prune ? '?prune=true' : ''}`)
 

@@ -13,7 +13,6 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -495,7 +494,7 @@ func (s *Server) handleListBackups(w http.ResponseWriter, r *http.Request) {
 		results = append(results, map[string]interface{}{
 			"id": id, "name": name, "sourcePaths": sourcePaths, "schedule": schedule,
 			"compressionLevel": compressionLevel,
-			"enabled": enabled == 1, "createdAt": createdAt,
+			"enabled":          enabled == 1, "createdAt": createdAt,
 		})
 	}
 	if results == nil {
@@ -560,7 +559,7 @@ func (s *Server) handleGetBackup(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"id": id, "name": name, "sourcePaths": sourcePaths, "schedule": schedule,
 		"compressionLevel": compressionLevel,
-		"enabled": enabled == 1, "createdAt": createdAt,
+		"enabled":          enabled == 1, "createdAt": createdAt,
 	})
 }
 
@@ -877,12 +876,23 @@ func (s *Server) handleSnapshotFiles(w http.ResponseWriter, r *http.Request) {
 	snapshotRowID, _ := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
 	prefix := r.URL.Query().Get("prefix")
 
-	// Lazy index if not yet populated.
+	// Lazy index on first browse — in the background, so the UI can show
+	// progress instead of hanging on one long request. The total comes from
+	// snapshots.file_count (0 = unknown → indeterminate progress).
 	var rusticID string
-	s.DB.QueryRowContext(r.Context(), `SELECT snapshot_id FROM snapshots WHERE id=?`, snapshotRowID).Scan(&rusticID)
-	if rusticID != "" {
-		if err := s.Catalog.IndexSnapshot(r.Context(), snapshotRowID, rusticID); err != nil {
+	var fileCount sql.NullInt64
+	s.DB.QueryRowContext(r.Context(), `SELECT snapshot_id, file_count FROM snapshots WHERE id=?`, snapshotRowID).Scan(&rusticID, &fileCount)
+	if indexed, _ := s.Catalog.IsIndexed(r.Context(), snapshotRowID); !indexed && rusticID != "" {
+		p := s.Catalog.EnsureIndexing(snapshotRowID, rusticID, fileCount.Int64)
+		phase, done, total, err, finished := p.Snapshot()
+		if err != nil {
 			writeError(w, http.StatusInternalServerError, fmt.Sprintf("index snapshot: %v", err))
+			return
+		}
+		if !finished {
+			writeJSON(w, http.StatusAccepted, map[string]interface{}{
+				"status": "indexing", "phase": phase, "done": done, "total": total,
+			})
 			return
 		}
 	}
@@ -898,76 +908,115 @@ func (s *Server) handleSnapshotFiles(w http.ResponseWriter, r *http.Request) {
 		norm = strings.Trim(prefix, "/") + "/"
 	}
 
-	query := `SELECT path, size, mtime, is_dir FROM file_index WHERE snapshot_id=? ORDER BY path LIMIT 5000`
-	rows, err := s.DB.QueryContext(r.Context(), query, snapshotRowID)
+	limit := 1000
+	if v := r.URL.Query().Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			limit = n
+		}
+	}
+	offset := 0
+	if v := r.URL.Query().Get("offset"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			offset = n
+		}
+	}
+	if limit < 1 {
+		limit = 1
+	}
+	if limit > 5000 {
+		limit = 5000
+	}
+	if offset < 0 {
+		offset = 0
+	}
+
+	children, total, err := listSnapshotChildren(r.Context(), s.DB, snapshotRowID, norm, limit, offset)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	defer rows.Close()
-	type child struct {
-		path      string
-		size      int64
-		mtime     string
-		isDir     bool
-		synthetic bool // derived from a deeper path, no real index row
-	}
-	byPath := map[string]*child{}
-	var order []string
-	for rows.Next() {
-		var path, mtime string
-		var size int64
-		var isDir int
-		rows.Scan(&path, &size, &mtime, &isDir)
-		p := strings.TrimPrefix(path, "/")
-		if !strings.HasPrefix(p, norm) {
-			continue
-		}
-		rel := strings.TrimPrefix(p, norm)
-		if rel == "" {
-			continue
-		}
-		c := &child{}
-		if i := strings.Index(rel, "/"); i >= 0 {
-			// Deeper than one level: show the immediate subdirectory.
-			c.path = norm + rel[:i]
-			c.isDir = true
-			c.synthetic = true
-		} else {
-			c.path = norm + rel
-			c.size = size
-			c.mtime = mtime
-			c.isDir = isDir == 1
-		}
-		if existing, ok := byPath[c.path]; ok {
-			// Prefer a real index row over a synthesized directory entry.
-			if existing.synthetic && !c.synthetic {
-				*existing = *c
-			}
-			continue
-		}
-		byPath[c.path] = c
-		order = append(order, c.path)
-	}
-	// Directories first, then alphabetical, as before.
-	sort.SliceStable(order, func(i, j int) bool {
-		a, b := byPath[order[i]], byPath[order[j]]
-		if a.isDir != b.isDir {
-			return a.isDir
-		}
-		return a.path < b.path
-	})
-	var files []map[string]interface{}
-	for _, p := range order {
-		c := byPath[p]
+	files := make([]map[string]interface{}, 0, len(children))
+	for _, c := range children {
 		files = append(files, map[string]interface{}{
 			"path": c.path, "size": c.size, "mtime": c.mtime, "isDir": c.isDir,
 		})
 	}
-	if files == nil {
-		files = []map[string]interface{}{}
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"files": files, "total": total, "limit": limit, "offset": offset,
+	})
+}
+
+// snapshotChild is one immediate child of a browsed snapshot prefix.
+type snapshotChild struct {
+	path  string
+	size  int64
+	mtime string
+	isDir bool
+}
+
+// listSnapshotChildren returns one page of the immediate children of norm
+// ("" for the snapshot root), directories first then alphabetical, plus the
+// total child count for pagination. Grouping happens in SQL so a page covers
+// whole folders, not raw paths; the windowed COUNT(*) avoids a second query.
+func listSnapshotChildren(ctx context.Context, db *sql.DB, snapshotRowID int64, norm string, limit, offset int) ([]snapshotChild, int, error) {
+	if limit < 1 {
+		limit = 1
 	}
-	writeJSON(w, http.StatusOK, files)
+	if limit > 5000 {
+		limit = 5000
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	// The path range is BINARY (case-sensitive) and uses the
+	// (snapshot_id, path) index. A child is a dir when its own row says so
+	// or when deeper paths were collapsed into it (single-array `rustic ls`
+	// output has no dir rows).
+	off := len(norm) + 1 // 1-based start of the remainder after norm
+	query := `
+		WITH children AS (
+			SELECT
+				child_path AS path,
+				MAX(CASE WHEN path = child_path THEN is_dir ELSE 1 END) AS is_dir,
+				MAX(CASE WHEN path = child_path THEN size ELSE 0 END) AS size,
+				MAX(CASE WHEN path = child_path THEN COALESCE(mtime, '') ELSE '' END) AS mtime
+			FROM (
+				SELECT path, size, mtime, is_dir,
+					CASE WHEN instr(substr(path, ?), '/') > 0
+						THEN substr(path, 1, ? + instr(substr(path, ?), '/') - 2)
+						ELSE path END AS child_path
+				FROM file_index
+				WHERE snapshot_id = ?
+					AND path >= ?
+					AND path < ? || char(1114111)
+					AND substr(path, 1, 1) != '/'
+			)
+			GROUP BY child_path
+		)
+		SELECT path, is_dir, size, mtime, COUNT(*) OVER () AS total
+		FROM children
+		ORDER BY is_dir DESC, path
+		LIMIT ? OFFSET ?`
+	rows, err := db.QueryContext(ctx, query, off, off, off, snapshotRowID, norm, norm, limit, offset)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+	var children []snapshotChild
+	total := 0
+	for rows.Next() {
+		var c snapshotChild
+		var isDir int
+		if err := rows.Scan(&c.path, &isDir, &c.size, &c.mtime, &total); err != nil {
+			return nil, 0, err
+		}
+		c.isDir = isDir == 1
+		children = append(children, c)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, err
+	}
+	return children, total, nil
 }
 
 // handleDeleteSnapshot removes a snapshot from the repository via
@@ -1029,8 +1078,10 @@ func (s *Server) handleGetStorage(w http.ResponseWriter, r *http.Request) {
 	}
 	var snapshotCount int64
 	var logicalBytes int64
+	// Logical size of the latest snapshot only: summing across snapshots
+	// double-counts deduplicated data and nobody restores every snapshot.
 	row := s.DB.QueryRowContext(r.Context(),
-		`SELECT COUNT(*), COALESCE(SUM(total_size),0) FROM snapshots`)
+		`SELECT COUNT(*), COALESCE((SELECT total_size FROM snapshots ORDER BY backup_time DESC LIMIT 1),0) FROM snapshots`)
 	_ = row.Scan(&snapshotCount, &logicalBytes)
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"totalBytes":    info.TotalBytes,

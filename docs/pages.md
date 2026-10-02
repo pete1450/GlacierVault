@@ -59,6 +59,13 @@ touching Glacier.
   🗑 deletes a snapshot (with an optional "also prune now" checkbox).
 - **File browser:** breadcrumb navigation, name/size/modified columns,
   checkboxes for selecting files and folders (select-all per folder).
+- **First-browse indexing:** the first time you open a snapshot, GlacierVault
+  builds its file index (`rustic ls --long` streamed into the local catalog:
+  paths, sizes, dates) and shows live progress — a few minutes of CPU for
+  very large snapshots, then instant browsing afterwards. One-time per
+  snapshot.
+- **Pagination:** folders with more than 1000 items are paged (1000/page
+  default, 250/500/1000/2500 selectable) with page numbers and a total count.
 - **Restore panel:** destination path input + **Restore** button. With
   nothing checked it restores the **full snapshot**; with selections it
   restores only those paths. Notes the 12–48 h Glacier wait.

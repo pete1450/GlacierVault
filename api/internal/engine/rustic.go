@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
 
 const rusticBin = "rustic"
@@ -314,68 +315,75 @@ func parseSnapshots(out []byte) ([]Snapshot, error) {
 
 // ListFiles returns file entries for a snapshot.
 //
-// rustic 0.9.x `ls --json` emits a single JSON array of relative path strings.
-// Older/newer versions may emit one JSON object per line (NDJSON) with
-// name/path/size/mtime/type fields; both formats are accepted. For the path
-// array format, size/mtime are unknown and directories are detected by the
-// "is a strict prefix of another path" heuristic.
+// `rustic ls --json` emits only a path array (no sizes/dates), and --long
+// cannot be combined with --json, so listing uses the --long text format:
+// `<perms> <uid> <gid> <size> <day> <mon> <year> <hh:mm> "<path>"` per line,
+// paths quoted (they may contain spaces). Lines that don't match are
+// skipped. rustic is pinned in the Dockerfile; if its long format changes,
+// indexing degrades to an empty listing rather than corrupt data.
 func (e *Engine) ListFiles(ctx context.Context, snapshotID string) ([]FileEntry, error) {
-	out, err := e.run(ctx, nil, "ls", snapshotID, "--json")
+	out, err := e.run(ctx, nil, "ls", "--long", snapshotID)
 	if err != nil {
 		return nil, err
 	}
-	trimmed := strings.TrimSpace(string(out))
-	if trimmed == "" {
-		return nil, nil
-	}
-
-	// Format 1: single JSON array of path strings.
-	if strings.HasPrefix(trimmed, "[") {
-		var paths []string
-		if err := json.Unmarshal([]byte(trimmed), &paths); err != nil {
-			return nil, fmt.Errorf("parse ls paths: %w", err)
-		}
-		return pathsToEntries(paths), nil
-	}
-
-	// Format 2: one JSON object per line.
 	var entries []FileEntry
 	scanner := bufio.NewScanner(bytes.NewReader(out))
+	scanner.Buffer(make([]byte, 1024*1024), 1024*1024)
 	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" {
-			continue
+		if entry, ok := parseLsLongLine(scanner.Text()); ok {
+			entries = append(entries, entry)
 		}
-		var entry FileEntry
-		if err := json.Unmarshal([]byte(line), &entry); err != nil {
-			continue
-		}
-		entries = append(entries, entry)
 	}
-	return entries, nil
+	return entries, scanner.Err()
 }
 
-// pathsToEntries converts relative path strings into FileEntries. A path is
-// considered a directory when it is a strict prefix (path + "/") of another
-// path in the list.
-func pathsToEntries(paths []string) []FileEntry {
-	entries := make([]FileEntry, 0, len(paths))
-	for _, p := range paths {
-		isDir := false
-		prefix := strings.TrimSuffix(p, "/") + "/"
-		for _, other := range paths {
-			if other != p && strings.HasPrefix(other, prefix) {
-				isDir = true
-				break
-			}
-		}
-		entries = append(entries, FileEntry{
-			Path: p,
-			Name: p[strings.LastIndex(p, "/")+1:],
-			Type: map[bool]string{true: "dir", false: "file"}[isDir],
-		})
+// parseLsLongLine parses one `rustic ls --long` output line.
+func parseLsLongLine(line string) (FileEntry, bool) {
+	// The path is the trailing quoted string and may contain spaces, so
+	// extract it before splitting the fixed leading columns.
+	start := strings.Index(line, "\"")
+	end := strings.LastIndex(line, "\"")
+	if start < 0 || end <= start {
+		return FileEntry{}, false
 	}
-	return entries
+	path := line[start+1 : end]
+	rest := strings.Fields(line[:start])
+	// perms, uid, gid, size, day, mon, year, hh:mm
+	if len(rest) != 8 {
+		return FileEntry{}, false
+	}
+	size, err := strconv.ParseInt(rest[3], 10, 64)
+	if err != nil || size < 0 {
+		return FileEntry{}, false
+	}
+	typ := "file"
+	if strings.HasPrefix(rest[0], "d") {
+		typ = "dir"
+	}
+	// "23 May 2024 18:31" -> RFC3339 UTC for consistent storage/display.
+	mtime := ""
+	if t, err := time.Parse("2 Jan 2006 15:04", strings.Join(rest[4:8], " ")); err == nil {
+		mtime = t.UTC().Format(time.RFC3339)
+	}
+	name := path
+	if i := strings.LastIndex(path, "/"); i >= 0 {
+		name = path[i+1:]
+	}
+	return FileEntry{Name: name, Path: path, Size: size, Mtime: mtime, Type: typ}, true
+}
+
+// ListFilesStream runs `rustic ls --long` and invokes onEntry for each entry
+// as it is listed, so callers can report progress on large snapshots without
+// buffering the entire listing first.
+func (e *Engine) ListFilesStream(ctx context.Context, snapshotID string, onEntry func(FileEntry)) error {
+	_, err := e.runStreamingWithProfileHook(ctx, nil, nil, "",
+		strings.TrimSuffix(e.configPath, ".toml"),
+		func(line string) {
+			if entry, ok := parseLsLongLine(line); ok {
+				onEntry(entry)
+			}
+		}, "ls", "--long", snapshotID)
+	return err
 }
 
 // RestoreOptions carries the Glacier warm-up configuration for RunRestore.
