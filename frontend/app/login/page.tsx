@@ -1,4 +1,5 @@
 'use client'
+import Image from 'next/image'
 import { useState } from 'react'
 import { login } from '@/lib/api'
 import { useRouter } from 'next/navigation'
@@ -26,7 +27,10 @@ export default function LoginPage() {
   return (
     <div className="min-h-screen flex items-center justify-center bg-gray-950">
       <div className="w-full max-w-sm bg-gray-900 rounded-xl shadow-lg p-8">
-        <h1 className="text-2xl font-bold text-white mb-2">GlacierVault</h1>
+        <div className="flex items-center gap-3 mb-2">
+          <Image src="/icon.png" alt="GlacierVault logo" width={40} height={40} className="rounded-lg" />
+          <h1 className="text-2xl font-bold text-white">GlacierVault</h1>
+        </div>
         <p className="text-gray-400 text-sm mb-6">Self-hosted AWS Glacier backup</p>
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>

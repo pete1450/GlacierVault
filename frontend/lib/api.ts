@@ -42,6 +42,7 @@ export const runBackupNow = (id: number) => req<{ jobId: number }>('POST', `/bac
 // Jobs
 export const listJobs = (limit = 50) => req<Job[]>('GET', `/jobs?limit=${limit}`)
 export const getJob = (id: number) => req<Job>('GET', `/jobs/${id}`)
+export const cancelJob = (id: number) => req<{ status: string }>('POST', `/jobs/${id}/cancel`)
 
 // Snapshots
 export const listSnapshots = () => req<Snapshot[]>('GET', '/snapshots')
@@ -121,7 +122,7 @@ export interface CreateBackupInput {
 }
 export interface Job {
   id: number; backupDefId: number; startedAt: string; completedAt: string | null
-  status: 'running' | 'completed' | 'failed'; bytesTransferred: number; errorMessage: string; logOutput: string
+  status: 'running' | 'completed' | 'failed' | 'cancelled'; bytesTransferred: number; errorMessage: string; logOutput: string
 }
 export interface Snapshot {
   id: number; snapshotId: string; backupDefId: number; hostname: string
