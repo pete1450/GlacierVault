@@ -49,7 +49,7 @@ func TestListSnapshotChildrenShowsAllTopLevel(t *testing.T) {
 		}
 	}
 
-	children, err := listSnapshotChildren(t.Context(), db, snapID, "")
+	children, _, err := listSnapshotChildren(t.Context(), db, snapID, "", 1000, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -82,7 +82,7 @@ func TestListSnapshotChildrenShowsAllTopLevel(t *testing.T) {
 	}
 
 	// Sub-prefix: dir32/ shows its 200 files + the sub dir, not the files inside sub.
-	sub, err := listSnapshotChildren(t.Context(), db, snapID, "dir32/")
+	sub, _, err := listSnapshotChildren(t.Context(), db, snapID, "dir32/", 1000, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -120,7 +120,7 @@ func TestListSnapshotChildrenSynthesizesDirs(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	children, err := listSnapshotChildren(t.Context(), db, 2, "")
+	children, _, err := listSnapshotChildren(t.Context(), db, 2, "", 1000, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -132,5 +132,52 @@ func TestListSnapshotChildrenSynthesizesDirs(t *testing.T) {
 	}
 	if children[1].path != "notes.txt" || children[1].isDir {
 		t.Errorf("expected file notes.txt second, got %+v", children[1])
+	}
+}
+
+// One flat folder with 2500 files: pagination slices it into pages and the
+// total stays constant across pages.
+func TestListSnapshotChildrenPagination(t *testing.T) {
+	db := openMigratedDB(t)
+	insertTestSnapshot(t, db, 3, "rustic-snap-3")
+	if _, err := db.Exec(`INSERT INTO file_index (snapshot_id, path, is_dir) VALUES (3, 'flat', 1)`); err != nil {
+		t.Fatal(err)
+	}
+	for f := 0; f < 2500; f++ {
+		if _, err := db.Exec(`INSERT INTO file_index (snapshot_id, path, size) VALUES (3, ?, 7)`,
+			fmt.Sprintf("flat/file%04d.bin", f)); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	page1, total, err := listSnapshotChildren(t.Context(), db, 3, "flat/", 1000, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page1) != 1000 || total != 2500 {
+		t.Fatalf("page 1: got %d rows total %d, want 1000 rows total 2500", len(page1), total)
+	}
+	if page1[0].path != "flat/file0000.bin" || page1[999].path != "flat/file0999.bin" {
+		t.Errorf("page 1 boundaries wrong: first=%q last=%q", page1[0].path, page1[999].path)
+	}
+
+	page3, total3, err := listSnapshotChildren(t.Context(), db, 3, "flat/", 1000, 2000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page3) != 500 || total3 != 2500 {
+		t.Fatalf("page 3: got %d rows total %d, want 500 rows total 2500", len(page3), total3)
+	}
+	if page3[0].path != "flat/file2000.bin" || page3[499].path != "flat/file2499.bin" {
+		t.Errorf("page 3 boundaries wrong: first=%q last=%q", page3[0].path, page3[499].path)
+	}
+
+	// Oversized limits are clamped to 5000.
+	clamped, _, err := listSnapshotChildren(t.Context(), db, 3, "flat/", 100000, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(clamped) != 2500 {
+		t.Fatalf("clamped large limit: got %d rows, want 2500", len(clamped))
 	}
 }

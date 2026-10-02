@@ -13,7 +13,7 @@ import (
 	"github.com/go-chi/chi/v5"
 )
 
-func getSnapshotFiles(t *testing.T, s *Server, id, prefix string) []map[string]any {
+func getSnapshotFiles(t *testing.T, s *Server, id, prefix string) (files []map[string]any, total int) {
 	t.Helper()
 	u := "/api/snapshots/" + id + "/files"
 	if prefix != "" {
@@ -28,11 +28,14 @@ func getSnapshotFiles(t *testing.T, s *Server, id, prefix string) []map[string]a
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, body %q", rec.Code, rec.Body.String())
 	}
-	var out []map[string]any
+	var out struct {
+		Files []map[string]any `json:"files"`
+		Total int              `json:"total"`
+	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	return out
+	return out.Files, out.Total
 }
 
 func filePaths(entries []map[string]any) []string {
@@ -72,25 +75,28 @@ func TestHandleSnapshotFilesCollapsesToImmediateChildren(t *testing.T) {
 	// pre-populated file_index, so no engine call happens.
 	s := &Server{DB: db, Catalog: catalog.New(db, nil)}
 
-	root := filePaths(getSnapshotFiles(t, s, "1", ""))
-	if want := []string{"backuptest", "loose.txt"}; !reflect.DeepEqual(root, want) {
-		t.Fatalf("root = %v, want %v", root, want)
+	root, rootTotal := getSnapshotFiles(t, s, "1", "")
+	if want := []string{"backuptest", "loose.txt"}; !reflect.DeepEqual(filePaths(root), want) {
+		t.Fatalf("root = %v, want %v", filePaths(root), want)
+	}
+	if rootTotal != 2 {
+		t.Fatalf("root total = %d, want 2", rootTotal)
 	}
 
-	sub := filePaths(getSnapshotFiles(t, s, "1", "backuptest/"))
-	if want := []string{"backuptest/sub", "backuptest/testfile.tst"}; !reflect.DeepEqual(sub, want) {
-		t.Fatalf("sub = %v, want %v", sub, want)
+	sub, _ := getSnapshotFiles(t, s, "1", "backuptest/")
+	if want := []string{"backuptest/sub", "backuptest/testfile.tst"}; !reflect.DeepEqual(filePaths(sub), want) {
+		t.Fatalf("sub = %v, want %v", filePaths(sub), want)
 	}
 
 	// A stray leading slash in the prefix (as an older client could send)
 	// must still resolve.
-	subSlashed := filePaths(getSnapshotFiles(t, s, "1", "/backuptest/"))
-	if want := []string{"backuptest/sub", "backuptest/testfile.tst"}; !reflect.DeepEqual(subSlashed, want) {
-		t.Fatalf("sub (slashed prefix) = %v, want %v", subSlashed, want)
+	subSlashed, _ := getSnapshotFiles(t, s, "1", "/backuptest/")
+	if want := []string{"backuptest/sub", "backuptest/testfile.tst"}; !reflect.DeepEqual(filePaths(subSlashed), want) {
+		t.Fatalf("sub (slashed prefix) = %v, want %v", filePaths(subSlashed), want)
 	}
 
-	deep := filePaths(getSnapshotFiles(t, s, "1", "backuptest/sub/"))
-	if want := []string{"backuptest/sub/deep.txt"}; !reflect.DeepEqual(deep, want) {
-		t.Fatalf("deep = %v, want %v", deep, want)
+	deep, _ := getSnapshotFiles(t, s, "1", "backuptest/sub/")
+	if want := []string{"backuptest/sub/deep.txt"}; !reflect.DeepEqual(filePaths(deep), want) {
+		t.Fatalf("deep = %v, want %v", filePaths(deep), want)
 	}
 }

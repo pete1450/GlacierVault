@@ -24,6 +24,9 @@ export default function SnapshotsPage() {
   const [busy, setBusy] = useState(false)
   const [notice, setNotice] = useState('')
   const [indexing, setIndexing] = useState<{ phase: string; done: number; total: number } | null>(null)
+  const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(1000)
+  const [totalFiles, setTotalFiles] = useState(0)
   const loadToken = useRef(0)
 
   function refresh() {
@@ -36,13 +39,13 @@ export default function SnapshotsPage() {
   // Loads a file listing, polling while the server builds the snapshot's
   // file index in the background (202 responses). The token discards stale
   // results when the user clicks another snapshot mid-poll.
-  async function loadFiles(snapId: number, p: string) {
+  async function loadFiles(snapId: number, p: string, pg: number, ps: number) {
     const t = ++loadToken.current
     setIndexing(null)
     setFiles([])
     for (;;) {
       if (loadToken.current !== t) return
-      const res = await getSnapshotFiles(snapId, p).catch(() => null)
+      const res = await getSnapshotFiles(snapId, p, ps, (pg - 1) * ps).catch(() => null)
       if (loadToken.current !== t) return
       if (res == null) {
         setIndexing(null)
@@ -51,6 +54,7 @@ export default function SnapshotsPage() {
       if (res.status === 'ready') {
         setIndexing(null)
         setFiles(res.files)
+        setTotalFiles(res.total)
         return
       }
       setIndexing({ phase: res.phase, done: res.done, total: res.total })
@@ -62,13 +66,40 @@ export default function SnapshotsPage() {
     setSelected(snap)
     setPrefix('')
     setChecked([])
-    loadFiles(snap.id, '')
+    setPage(1)
+    loadFiles(snap.id, '', 1, pageSize)
   }
 
   async function navigatePrefix(p: string) {
     if (!selected) return
     setPrefix(p)
-    loadFiles(selected.id, p)
+    setPage(1)
+    loadFiles(selected.id, p, 1, pageSize)
+  }
+
+  function changePage(pg: number) {
+    if (!selected || pg === page) return
+    setPage(pg)
+    loadFiles(selected.id, prefix, pg, pageSize)
+  }
+
+  function changePageSize(ps: number) {
+    if (!selected || ps === pageSize) return
+    setPageSize(ps)
+    setPage(1)
+    loadFiles(selected.id, prefix, 1, ps)
+  }
+
+  // Compact page-number items: 1 … p-1 p p+1 … N.
+  function pageItems(pg: number, totalPages: number): (number | '…')[] {
+    const keep = new Set([1, totalPages, pg - 1, pg, pg + 1])
+    const nums = [...keep].filter(n => n >= 1 && n <= totalPages).sort((a, b) => a - b)
+    const out: (number | '…')[] = []
+    nums.forEach((n, i) => {
+      if (i > 0 && n - nums[i - 1] > 1) out.push('…')
+      out.push(n)
+    })
+    return out
   }
 
   function togglePath(path: string) {
@@ -264,6 +295,46 @@ export default function SnapshotsPage() {
                   ))}
                 </tbody>
               </table>
+              {!indexing && totalFiles > pageSize && (
+                <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3 text-sm border-t border-gray-800">
+                  <span className="text-gray-500">
+                    Showing {((page - 1) * pageSize + 1).toLocaleString()}–
+                    {Math.min(page * pageSize, totalFiles).toLocaleString()} of {totalFiles.toLocaleString()}
+                  </span>
+                  <div className="flex items-center gap-1.5">
+                    <select
+                      value={pageSize}
+                      onChange={e => changePageSize(Number(e.target.value))}
+                      className="bg-gray-800 text-gray-200 text-xs rounded px-2 py-1 mr-2"
+                    >
+                      {[250, 500, 1000, 2500].map(n => (
+                        <option key={n} value={n}>{n} / page</option>
+                      ))}
+                    </select>
+                    <button
+                      disabled={page === 1}
+                      onClick={() => changePage(page - 1)}
+                      className="px-2 py-1 rounded bg-gray-800 text-gray-300 text-xs disabled:opacity-40"
+                    >‹ Prev</button>
+                    {pageItems(page, Math.ceil(totalFiles / pageSize)).map((it, i) =>
+                      it === '…' ? (
+                        <span key={`e${i}`} className="text-gray-600 text-xs px-1">…</span>
+                      ) : (
+                        <button
+                          key={it}
+                          onClick={() => changePage(it)}
+                          className={`px-2 py-1 rounded text-xs ${it === page ? 'bg-blue-600 text-white' : 'bg-gray-800 text-gray-300'}`}
+                        >{it}</button>
+                      )
+                    )}
+                    <button
+                      disabled={page >= Math.ceil(totalFiles / pageSize)}
+                      onClick={() => changePage(page + 1)}
+                      className="px-2 py-1 rounded bg-gray-800 text-gray-300 text-xs disabled:opacity-40"
+                    >Next ›</button>
+                  </div>
+                </div>
+              )}
               {files.length === 0 && !indexing && <p className="text-center text-gray-500 py-8 text-sm">Empty directory.</p>}
               {indexing && (
                 <div className="text-center py-10 space-y-3">

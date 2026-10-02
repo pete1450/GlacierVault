@@ -908,21 +908,42 @@ func (s *Server) handleSnapshotFiles(w http.ResponseWriter, r *http.Request) {
 		norm = strings.Trim(prefix, "/") + "/"
 	}
 
-	children, err := listSnapshotChildren(r.Context(), s.DB, snapshotRowID, norm)
+	limit := 1000
+	if v := r.URL.Query().Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			limit = n
+		}
+	}
+	offset := 0
+	if v := r.URL.Query().Get("offset"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			offset = n
+		}
+	}
+	if limit < 1 {
+		limit = 1
+	}
+	if limit > 5000 {
+		limit = 5000
+	}
+	if offset < 0 {
+		offset = 0
+	}
+
+	children, total, err := listSnapshotChildren(r.Context(), s.DB, snapshotRowID, norm, limit, offset)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	var files []map[string]interface{}
+	files := make([]map[string]interface{}, 0, len(children))
 	for _, c := range children {
 		files = append(files, map[string]interface{}{
 			"path": c.path, "size": c.size, "mtime": c.mtime, "isDir": c.isDir,
 		})
 	}
-	if files == nil {
-		files = []map[string]interface{}{}
-	}
-	writeJSON(w, http.StatusOK, files)
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"files": files, "total": total, "limit": limit, "offset": offset,
+	})
 }
 
 // snapshotChild is one immediate child of a browsed snapshot prefix.
@@ -933,54 +954,69 @@ type snapshotChild struct {
 	isDir bool
 }
 
-// listSnapshotChildren returns the immediate children of norm ("" for the
-// snapshot root), directories first then alphabetical. Grouping happens in
-// SQL so the LIMIT applies per folder, not per snapshot.
-func listSnapshotChildren(ctx context.Context, db *sql.DB, snapshotRowID int64, norm string) ([]snapshotChild, error) {
+// listSnapshotChildren returns one page of the immediate children of norm
+// ("" for the snapshot root), directories first then alphabetical, plus the
+// total child count for pagination. Grouping happens in SQL so a page covers
+// whole folders, not raw paths; the windowed COUNT(*) avoids a second query.
+func listSnapshotChildren(ctx context.Context, db *sql.DB, snapshotRowID int64, norm string, limit, offset int) ([]snapshotChild, int, error) {
+	if limit < 1 {
+		limit = 1
+	}
+	if limit > 5000 {
+		limit = 5000
+	}
+	if offset < 0 {
+		offset = 0
+	}
 	// The path range is BINARY (case-sensitive) and uses the
 	// (snapshot_id, path) index. A child is a dir when its own row says so
 	// or when deeper paths were collapsed into it (single-array `rustic ls`
 	// output has no dir rows).
 	off := len(norm) + 1 // 1-based start of the remainder after norm
 	query := `
-	SELECT
-		child_path AS path,
-		MAX(CASE WHEN path = child_path THEN is_dir ELSE 1 END) AS is_dir,
-		MAX(CASE WHEN path = child_path THEN size ELSE 0 END) AS size,
-		MAX(CASE WHEN path = child_path THEN COALESCE(mtime, '') ELSE '' END) AS mtime
-	FROM (
-		SELECT path, size, mtime, is_dir,
-			CASE WHEN instr(substr(path, ?), '/') > 0
-				THEN substr(path, 1, ? + instr(substr(path, ?), '/') - 2)
-				ELSE path END AS child_path
-		FROM file_index
-		WHERE snapshot_id = ?
-			AND path >= ?
-			AND path < ? || char(1114111)
-			AND substr(path, 1, 1) != '/'
-	)
-	GROUP BY child_path
-	ORDER BY is_dir DESC, child_path
-	LIMIT 5000`
-	rows, err := db.QueryContext(ctx, query, off, off, off, snapshotRowID, norm, norm)
+		WITH children AS (
+			SELECT
+				child_path AS path,
+				MAX(CASE WHEN path = child_path THEN is_dir ELSE 1 END) AS is_dir,
+				MAX(CASE WHEN path = child_path THEN size ELSE 0 END) AS size,
+				MAX(CASE WHEN path = child_path THEN COALESCE(mtime, '') ELSE '' END) AS mtime
+			FROM (
+				SELECT path, size, mtime, is_dir,
+					CASE WHEN instr(substr(path, ?), '/') > 0
+						THEN substr(path, 1, ? + instr(substr(path, ?), '/') - 2)
+						ELSE path END AS child_path
+				FROM file_index
+				WHERE snapshot_id = ?
+					AND path >= ?
+					AND path < ? || char(1114111)
+					AND substr(path, 1, 1) != '/'
+			)
+			GROUP BY child_path
+		)
+		SELECT path, is_dir, size, mtime, COUNT(*) OVER () AS total
+		FROM children
+		ORDER BY is_dir DESC, path
+		LIMIT ? OFFSET ?`
+	rows, err := db.QueryContext(ctx, query, off, off, off, snapshotRowID, norm, norm, limit, offset)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	defer rows.Close()
 	var children []snapshotChild
+	total := 0
 	for rows.Next() {
 		var c snapshotChild
 		var isDir int
-		if err := rows.Scan(&c.path, &isDir, &c.size, &c.mtime); err != nil {
-			return nil, err
+		if err := rows.Scan(&c.path, &isDir, &c.size, &c.mtime, &total); err != nil {
+			return nil, 0, err
 		}
 		c.isDir = isDir == 1
 		children = append(children, c)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, err
+		return nil, 0, err
 	}
-	return children, nil
+	return children, total, nil
 }
 
 // handleDeleteSnapshot removes a snapshot from the repository via
