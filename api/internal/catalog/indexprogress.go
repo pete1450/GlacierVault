@@ -104,22 +104,14 @@ func (c *Catalog) indexSnapshotWithProgress(ctx context.Context, snapshotRowID i
 		return nil
 	}
 
-	// Phase 1: stream `rustic ls`, counting entries live instead of
+	// Phase 1: stream `rustic ls --long`, counting entries live instead of
 	// buffering the whole listing before doing anything.
 	var entries []engine.FileEntry
-	streamed, err := c.engine.ListFilesStream(ctx, rusticSnapshotID, func(e engine.FileEntry) {
+	if err := c.engine.ListFilesStream(ctx, rusticSnapshotID, func(e engine.FileEntry) {
 		entries = append(entries, e)
 		prog.set("discovering", int64(len(entries)))
-	})
-	if err != nil {
+	}); err != nil {
 		return err
-	}
-	if !streamed {
-		// Single-array format (small snapshots): no streaming possible.
-		if entries, err = c.engine.ListFiles(ctx, rusticSnapshotID); err != nil {
-			return err
-		}
-		prog.set("discovering", int64(len(entries)))
 	}
 
 	// Phase 2: bulk insert, reporting every 1000 rows.
