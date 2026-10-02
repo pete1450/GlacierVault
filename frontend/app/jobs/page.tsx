@@ -107,11 +107,14 @@ export default function JobsPage() {
     try {
       const data = await listJobs(50)
       setJobs(data)
-      // Auto-select first running job, then most recent
-      if (selectedId === null) {
-        const running = data.find((j) => j.status === 'running')
-        setSelectedId(running?.id ?? data[0]?.id ?? null)
-      }
+      // Auto-select first running job, then most recent — but only until
+      // the user picks one. Functional update: the 5s poll interval holds
+      // the first render's closure (where selectedId is always null), so
+      // reading selectedId directly here would re-select the running job
+      // on every poll.
+      setSelectedId((prev) =>
+        prev === null ? (data.find((j) => j.status === 'running')?.id ?? data[0]?.id ?? null) : prev
+      )
     } catch {
       setError('Failed to load jobs')
     } finally {
