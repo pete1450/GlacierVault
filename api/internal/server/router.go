@@ -1078,8 +1078,10 @@ func (s *Server) handleGetStorage(w http.ResponseWriter, r *http.Request) {
 	}
 	var snapshotCount int64
 	var logicalBytes int64
+	// Logical size of the latest snapshot only: summing across snapshots
+	// double-counts deduplicated data and nobody restores every snapshot.
 	row := s.DB.QueryRowContext(r.Context(),
-		`SELECT COUNT(*), COALESCE(SUM(total_size),0) FROM snapshots`)
+		`SELECT COUNT(*), COALESCE((SELECT total_size FROM snapshots ORDER BY backup_time DESC LIMIT 1),0) FROM snapshots`)
 	_ = row.Scan(&snapshotCount, &logicalBytes)
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"totalBytes":    info.TotalBytes,

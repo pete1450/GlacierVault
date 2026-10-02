@@ -176,7 +176,7 @@ export default function SnapshotsPage() {
             <span className="font-semibold text-gray-200">Repository storage</span>
             <span><span className="font-bold text-white">{formatBytes(storage.totalBytes)}</span> <span className="text-gray-500">total</span></span>
             <span className="text-gray-500">{formatBytes(storage.packBytes)} in data packs · {formatBytes(storage.indexBytes)} index</span>
-            <span className="text-gray-500">{storage.snapshotCount} snapshots · {formatBytes(storage.logicalBytes)} logical size</span>
+            <span className="text-gray-500">{storage.snapshotCount} snapshots · {formatBytes(storage.logicalBytes)} latest snapshot</span>
             <button
               onClick={() => setConfirmPrune(true)}
               disabled={busy}
