@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
+	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -43,10 +45,26 @@ type BackupDef struct {
 	Enabled          bool
 }
 
+// scheduleLocation resolves the timezone that backup cron schedules evaluate
+// in. The TZ environment variable (IANA name, e.g. "America/Chicago") wins;
+// otherwise the container's local zone applies — which is UTC on a stock
+// Docker image, the classic "my 2 AM backup runs at 9 PM" surprise.
+func scheduleLocation() *time.Location {
+	if tz := strings.TrimSpace(os.Getenv("TZ")); tz != "" {
+		if loc, err := time.LoadLocation(tz); err == nil {
+			return loc
+		} else {
+			log.Printf("scheduler: invalid TZ=%q, falling back to container local time: %v", tz, err)
+		}
+	}
+	return time.Local
+}
+
 // Scheduler manages cron-driven backup jobs.
 type Scheduler struct {
 	mu      sync.Mutex
 	cron    *cron.Cron
+	loc     *time.Location
 	db      *sql.DB
 	engine  *engine.Engine
 	catalog *catalog.Catalog
@@ -56,8 +74,10 @@ type Scheduler struct {
 }
 
 func New(db *sql.DB, eng *engine.Engine, cat *catalog.Catalog, n *notify.Manager) *Scheduler {
+	loc := scheduleLocation()
 	s := &Scheduler{
-		cron:    cron.New(),
+		cron:    cron.New(cron.WithLocation(loc)),
+		loc:     loc,
 		db:      db,
 		engine:  eng,
 		catalog: cat,
@@ -67,6 +87,9 @@ func New(db *sql.DB, eng *engine.Engine, cat *catalog.Catalog, n *notify.Manager
 	s.runFn = s.runBackup
 	return s
 }
+
+// Location reports the timezone backup schedules evaluate in.
+func (s *Scheduler) Location() *time.Location { return s.loc }
 
 // Start loads backup definitions from DB and starts the cron daemon.
 func (s *Scheduler) Start(ctx context.Context) error {
@@ -79,6 +102,9 @@ func (s *Scheduler) Start(ctx context.Context) error {
 			log.Printf("scheduler: skip %q: %v", def.Name, err)
 		}
 	}
+	now := time.Now().In(s.loc)
+	log.Printf("scheduler: backup schedules evaluate in %s (local time now %s)",
+		s.loc.String(), now.Format("15:04 MST"))
 	s.cron.Start()
 	return nil
 }

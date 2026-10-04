@@ -145,6 +145,7 @@ export interface SetupStatus {
 }
 export interface BackupDef {
   id: number; name: string; sourcePaths: string; schedule: string
+  scheduleTimezone?: string
   compressionLevel: number; enabled: boolean; createdAt: string
 }
 export interface CreateBackupInput {

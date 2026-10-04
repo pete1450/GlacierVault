@@ -33,6 +33,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     npm \
     python3 \
     python3-pip \
+    tzdata \
     && rm -rf /var/lib/apt/lists/*
 
 # Apprise: notification dispatcher (Discord, Slack, Telegram, email, ntfy,
