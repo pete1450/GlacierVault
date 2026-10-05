@@ -9,8 +9,6 @@ A self-hosted backup appliance that makes cheap AWS Glacier Deep Archive as simp
 - [warmup-s3-archives](https://gitlab.com/philipmw/warmup-s3-archives) — restores archived S3 objects via Batch Operations before download
 - [Apprise](https://github.com/caronc/apprise) — notification dispatch (Discord, Slack, Telegram, email, ntfy, webhooks, …)
 
-## ⚠️ Work in progress
-
 
 Thought process
  - Deep archive is dirt-cheap but retrieval can be a pain
@@ -19,13 +17,6 @@ Thought process
  - PUT/GET request need to be managed intelligently 
  - Warmup process takes a while
  - Wouldn't it be nice to have this all in a single app
-
----
-
-## THIS VERY MUCH A WORK-IN-PROGRESS REPO!
- - I've tested from backup to restore but it has been limited.
- - Do not rely on this project for your real backups yet!
- - I'd be very open to PRs if anyone wants to dig in.
 
 <img width="934" height="555" alt="image" src="https://github.com/user-attachments/assets/ea0e41c0-9c51-4071-b240-ac97daf67864" />
 <img width="1053" height="926" alt="image" src="https://github.com/user-attachments/assets/2a25e9a7-2b83-4184-8159-2c7a3614b07d" />
