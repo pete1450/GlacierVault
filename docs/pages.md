@@ -3,6 +3,7 @@
 Every page in the GlacierVault UI, what it's for, and what's on it.
 
 ## Dashboard (`/`)
+<img width="1069" height="517" alt="image" src="https://github.com/user-attachments/assets/ad5eea38-dff0-4440-aa8d-ccefbe870633" />
 
 The landing page. If setup hasn't completed, you're redirected to `/setup`.
 
@@ -15,6 +16,7 @@ The landing page. If setup hasn't completed, you're redirected to `/setup`.
 snapshot count mean the appliance is doing its job.*
 
 ## Backup Sources (`/backups`)
+<img width="1048" height="308" alt="image" src="https://github.com/user-attachments/assets/e4bc1255-db38-48ea-8476-15268d68a9bd" />
 
 Where backup definitions live. Each definition is a card showing name,
 enabled/disabled state, schedule, compression level, and
@@ -37,6 +39,7 @@ Cron expressions are evaluated in the container's `TZ` timezone (set
 page shows which zone is active next to each schedule.
 
 ## Jobs (`/jobs`)
+<img width="1055" height="626" alt="image" src="https://github.com/user-attachments/assets/b0219756-edb8-423d-9996-1d5010443ad4" />
 
 Every backup run (and the setup deploy) is a job.
 
@@ -50,6 +53,7 @@ Every backup run (and the setup deploy) is a job.
 output is in the log verbatim.*
 
 ## Snapshots (`/snapshots`)
+<img width="1072" height="467" alt="image" src="https://github.com/user-attachments/assets/857028cd-e43d-402c-a08f-4661d4718d13" />
 
 The heart of the app: everything you've backed up, browsable without
 touching Glacier.
@@ -77,6 +81,7 @@ touching Glacier.
 only. Browse as much as you like before committing to a restore.*
 
 ## Restores (`/restore`)
+<img width="1046" height="694" alt="image" src="https://github.com/user-attachments/assets/b34db0c9-d734-44ed-90b9-c88ee9e4f407" />
 
 Tracks every restore job from request to files-on-disk.
 
@@ -94,6 +99,9 @@ on the Bulk tier — that's Glacier working, not the app stuck. Budget up to
 48 h.*
 
 ## Settings (`/settings`)
+<p float="left">
+<img width="500" alt="image" src="https://github.com/user-attachments/assets/41517e75-952c-44aa-b5fd-877c15fe2240" /> <img width="500" alt="image" src="https://github.com/user-attachments/assets/62d4e6dc-3670-4df4-85a2-72d72ef4f83f" /> <img width="500" alt="image" src="https://github.com/user-attachments/assets/9487fe26-073e-4bfa-a74a-b9aab8ff47d9" />
+</p>
 
 - **Infrastructure:** region, deploy timestamp, hot and cold bucket names
   (from the setup record).
