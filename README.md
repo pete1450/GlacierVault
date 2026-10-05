@@ -1,5 +1,5 @@
 # GlacierVault
-<img src="glaciervaultlogo.png" width="250">
+<img src="glaciervaultlogo.png" alt="logo" width="250">
 
 A self-hosted backup appliance that makes cheap AWS Glacier Deep Archive as simple as possible: you bring AWS credentials, it handles the rest. One Docker container with a web UI — it deploys the AWS infrastructure with CDK, schedules encrypted [Rustic](https://github.com/rustic-rs/rustic) backups into Deep Archive, and walks restores through Glacier retrieval with a private CloudFront distribution for free-egress downloads and Apprise notifications when jobs finish.
 
@@ -19,8 +19,10 @@ Thought process
  - Warmup process takes a while
  - Wouldn't it be nice to have this all in a single app
 
-<img width="934" height="555" alt="image" src="https://github.com/user-attachments/assets/ea0e41c0-9c51-4071-b240-ac97daf67864" />
-<img width="1053" height="926" alt="image" src="https://github.com/user-attachments/assets/2a25e9a7-2b83-4184-8159-2c7a3614b07d" />
+<img width="934" alt="image" src="https://github.com/user-attachments/assets/ea0e41c0-9c51-4071-b240-ac97daf67864" />
+<img width="1053" alt="image" src="https://github.com/user-attachments/assets/2a25e9a7-2b83-4184-8159-2c7a3614b07d" />
+<img width="816" alt="image" src="https://github.com/user-attachments/assets/2b22cf41-45e8-431c-b3dc-930db5a9702e" />
+
 
 ## Quick start
 
