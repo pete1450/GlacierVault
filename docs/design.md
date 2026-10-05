@@ -237,28 +237,26 @@ UI: pick snapshot → browse → select files (or nothing = full) → destinatio
 **Restart resilience:** the moment warmup-s3-archives submits the Batch
 job, its job ID is captured from the tool's output and persisted to
 `restore_jobs.batch_job_id` (status advances to `retrieval_in_progress`).
-If the container restarts mid-warmup, startup reconciliation triages every
+If the container restarts mid-restore, startup reconciliation triages every
 non-terminal job: rows with no Batch job ID are marked failed (nothing was
-submitted server-side; safe to retry), while rows with a job ID resume — a
-background goroutine polls `s3:DescribeJob` until the job completes and
-then runs step 4 as a plain download-only restore (no second Batch job, no
-second 48 h wait). The Batch job ID is also exposed on the job-detail API
+submitted server-side; safe to retry), while rows with a job ID simply
+re-run the whole restore — the warmup is idempotent (already-thawed packs
+are skipped, their restored-copy expiry just extended, and the wrapper
+re-submits Batch jobs for the rest), so no special resume logic is needed
+and no batch is lost. The Batch job ID is also exposed on the job-detail API
 as `batchJobId` for debugging.
 
-**Known gap — multi-batch restarts:** only the *first* submitted batch's
-job ID is persisted (`WHERE batch_job_id IS NULL` ignores later ones), and
-the wrapper's batch counter lives in the temp work dir, which does not
-survive container replacement. If the container restarts during a
-multi-batch (1000+ packs) warmup, unsubmitted batches are lost for that
-restore: the resume path waits for the recorded batch, then runs the
-warmup-free download, which fails on packs that were never thawed. The
-recovery is to start a new restore — the wrapper re-submits a Batch job for
-all keys in each batch, which is safe to repeat: already-thawed packs are
-not re-thawed (their restored copies stay valid until their per-batch
-expiry, which the re-request aligns/extends), and packs still thawing
-report RestoreAlreadyInProgress (HTTP 409), which the tool treats as
-recoverable and keeps waiting on. Single-batch
-restores are unaffected.
+**Why not trust the Batch job status:** an S3 Batch restore job reports
+`Complete` after restore *requests* are initiated for each object — not when
+the objects are thawed (AWS documents this explicitly). GlacierVault
+therefore treats neither the Batch job status nor the wrapper's per-batch
+output as completion: the `glaciervault-warmup` wrapper prints
+`glaciervault-warmup: warmup complete` only when its *last* batch's
+warmup-s3-archives invocation exits 0 (every pack's restored copy live,
+SQS-confirmed), and the restore manager fires the "warmup complete"
+notification and marks `retrieval_complete` on that line. A container
+restart during the thaw wait just re-runs the warmup; the download still
+starts only after a genuine all-thawed signal.
 
 Restore stages shown in the UI: `queued → warmup_requested →
 retrieval_in_progress → retrieval_complete → restoring → completed`

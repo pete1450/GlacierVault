@@ -17,10 +17,8 @@ import (
 )
 
 // Retrieval tuning. Glacier Deep Archive Bulk tier restores can take up to
-// 48 hours. The overall restore deadline is now computed per restore by
-// ComputeWarmupPlan (72h per warm-up batch plus download headroom);
-// restoreTimeout is the fallback when the pack count cannot be determined.
-const restoreTimeout = 72 * time.Hour
+// 48 hours. The overall restore deadline is computed per restore by
+// ComputeWarmupPlan (72h per warm-up batch plus download headroom).
 
 // GlacierJobTier selects the S3 restore tier used by warmup-s3-archives.
 // BULK is the cheapest option (~8-10x cheaper than STANDARD) at the cost of
@@ -137,7 +135,7 @@ func (m *Manager) run(ctx context.Context, jobID, snapshotRowID int64, paths []s
 		Env:        env,
 		Dir:        workDir,
 		ConfigPath: m.cfRestoreProfile(ctx, buf, workDir),
-		LineHook:   m.watchForBatchJobID(ctx, jobID),
+		LineHook:   m.warmupLineHook(ctx, jobID),
 	}); err != nil {
 		return fmt.Errorf("rustic restore: %w", err)
 	}
@@ -421,7 +419,7 @@ func (m *Manager) awsEnv(ctx context.Context) ([]string, error) {
 // warmup-s3-archives reports "Created S3 batch job. Job ID: <uuid>" at info
 // level via env_logger, whose default level (when RUST_LOG is unset) is
 // error — so without this the line is silently swallowed, the
-// watchForBatchJobID hook never fires, no batch_job_id is recorded, and a
+// warmupLineHook never sees a job ID, no batch_job_id is recorded, and a
 // container restart fails the restore instead of resuming it. An explicit
 // RUST_LOG (e.g. from the container environment) is respected.
 func ensureWarmupLogLevel(env []string) []string {

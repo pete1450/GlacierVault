@@ -202,6 +202,36 @@ Pack downloads go through the private CloudFront distribution by default
 > snapshot paths, so a bare folder path matches only the directory entry —
 > GlacierVault also passes `<folder>/**` to pull in the contents.)
 
+### Field notes: memory and download speed
+
+Two observations from a real ~523 GiB restore (October 2026) worth knowing
+before you run a big one:
+
+**Memory.** Rustic's restore held ~4 GB of anonymous RSS — host dmesg
+showed the OOM-killer taking it at `anon-rss:3989648kB` on a 10 GB host
+where less than 4 GB was actually free (other workloads had eaten the
+headroom). The footprint scales with pack size: several packs are held
+decrypted/decompressed in memory at once, and this repo uses 512 MiB
+packs. If your host is tight on RAM, free memory for the duration of the
+restore or add swap so the kernel pages instead of killing rustic (e.g. an
+8 GB swapfile: `fallocate -l 8G /swapfile && chmod 600 /swapfile &&
+mkswap /swapfile && swapon /swapfile`, plus a `/swapfile none swap sw 0 0`
+line in `/etc/fstab` so it survives reboot — that swap is what got this
+restore across the finish line). A killed restore is safe to retry:
+already-restored files stay put and the warmup is idempotent
+(already-thawed packs are reused until their copy expiry).
+
+**Download speed.** Pack downloads ran well below the host's 1 Gbps link
+speed. The warmup plan's download headroom assumes a conservative
+100 Mbit/s, which still covered this restore — but if your effective
+throughput is lower, lower the **restore download-rate tuning** (Settings
+page) to match reality so the overall restore timeout stays conservative.
+Suspects for slow downloads, in rough order of likelihood: decrypt +
+decompress CPU on large packs, a slow destination (this restore wrote to
+network storage), and per-connection S3/CloudFront throughput limits.
+Watch CPU vs. network during the download phase to see which is the
+limiter on your host.
+
 ## 5. Delete snapshots and prune
 
 - **Delete** (🗑 on a snapshot): removes the snapshot reference

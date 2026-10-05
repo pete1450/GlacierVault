@@ -32,6 +32,9 @@ source paths, with actions:
 (paths *inside the container*, e.g. `/mnt/photos` — mount host dirs read-only
 via Docker volumes), schedule presets (Daily 2 AM, Weekly Sun 2 AM, Every 6
 hours, Hourly, or custom cron), compression slider (1–22), and the encryption password field.
+Cron expressions are evaluated in the container's `TZ` timezone (set
+`TZ=America/Chicago` in docker-compose.yml; defaults to UTC) — the Backups
+page shows which zone is active next to each schedule.
 
 ## Jobs (`/jobs`)
 

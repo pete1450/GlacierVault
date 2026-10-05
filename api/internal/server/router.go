@@ -485,6 +485,10 @@ func (s *Server) handleListBackups(w http.ResponseWriter, r *http.Request) {
 	defer rows.Close()
 
 	var results []map[string]interface{}
+	scheduleTZ := ""
+	if s.Scheduler != nil {
+		scheduleTZ = s.Scheduler.Location().String()
+	}
 	for rows.Next() {
 		var id int64
 		var name, sourcePaths, schedule string
@@ -493,6 +497,7 @@ func (s *Server) handleListBackups(w http.ResponseWriter, r *http.Request) {
 		rows.Scan(&id, &name, &sourcePaths, &schedule, &compressionLevel, &enabled, &createdAt)
 		results = append(results, map[string]interface{}{
 			"id": id, "name": name, "sourcePaths": sourcePaths, "schedule": schedule,
+			"scheduleTimezone": scheduleTZ,
 			"compressionLevel": compressionLevel,
 			"enabled":          enabled == 1, "createdAt": createdAt,
 		})

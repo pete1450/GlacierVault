@@ -259,7 +259,7 @@ export default function BackupsPage() {
               </Field>
 
               {/* Schedule */}
-              <Field label="Schedule">
+              <Field label="Schedule" hint={backups[0]?.scheduleTimezone ? `Cron expressions are evaluated in ${backups[0].scheduleTimezone}. Set the container's TZ variable to change it.` : undefined}>
                 <div className="space-y-2">
                   <div className="grid grid-cols-2 gap-2">
                     {NAMED_SCHEDULES.map(s => (
@@ -370,7 +370,7 @@ function BackupCard({
             </span>
           </div>
           <div className="flex flex-wrap gap-x-4 gap-y-1 text-sm text-gray-400">
-            <span>⏱ {backup.schedule}</span>
+            <span>⏱ {backup.schedule}{backup.scheduleTimezone ? ` (${backup.scheduleTimezone})` : ''}</span>
             <span>📦 compression {backup.compressionLevel}</span>
           </div>
         </div>

@@ -26,6 +26,10 @@ services:
     environment:
       # Set your initial login password here (or change it after first boot).
       - INITIAL_PASSWORD=changeme
+      # Timezone that backup schedules (cron expressions) evaluate in.
+      # Use an IANA name, e.g. America/Chicago, Europe/Berlin.
+      # Without this the container runs on UTC.
+      - TZ=${TZ:-UTC}
       # Optional: override config/database locations.
       # - CONFIG_DIR=/config
       # - DATABASE_PATH=/database/glaciervault.db
