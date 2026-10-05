@@ -31,7 +31,6 @@ AWS
 ├─ Hot Repository Bucket
 ├─ Cold Repository Bucket
 ├─ SQS Queue
-├─ Lambda Functions
 ├─ Glacier Restore Notifications
 └─ Warmup Infrastructure
 ```
@@ -117,39 +116,6 @@ Display Snapshots Immediately
 
 This eliminates unnecessary cloud operations and allows the application to feel responsive despite using archival storage.
 
----
-
-# Metadata Synchronization
-
-## After Backup Completion
-
-After every successful backup:
-
-```text
-Rustic Backup
-    ↓
-Rustic Snapshot Enumeration
-    ↓
-Metadata Extraction
-    ↓
-Catalog Update
-```
-
-The application executes:
-
-```bash
-rustic snapshots --json
-```
-
-and updates the catalog.
-
-Optionally:
-
-```bash
-rustic ls <snapshot> --json
-```
-
-may be used to populate detailed file indexes.
 
 ---
 
