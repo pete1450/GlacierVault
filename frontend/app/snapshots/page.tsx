@@ -121,26 +121,6 @@ export default function SnapshotsPage() {
     setConfirmRestore(true)
   }
 
-  // Best-effort byte total for the checked paths, from the loaded file list.
-  // Directories include everything beneath them. May undercount when checked
-  // files sit on other pages — the dialog labels the cost an estimate.
-  function selectedBytes(): number {
-    if (!selected) return 0
-    if (checked.length === 0) return selected.totalSize
-    let sum = 0
-    const seen = new Set<string>()
-    for (const c of checked) {
-      for (const f of files) {
-        if (f.isDir) continue
-        if ((f.path === c || f.path.startsWith(c + '/')) && !seen.has(f.path)) {
-          seen.add(f.path)
-          sum += f.size
-        }
-      }
-    }
-    return sum
-  }
-
   async function confirmRestoreJob(): Promise<number> {
     if (!selected) throw new Error('No snapshot selected')
     const result = await initiateRestore(selected.id, checked, restoreDest)
@@ -423,13 +403,12 @@ export default function SnapshotsPage() {
       {/* Restore confirmation dialog with cost estimate */}
       {confirmRestore && selected && (
         <RestoreConfirmDialog
+          snapshotId={selected.id}
           snapshotLabel={`Snapshot #${selected.id}`}
-          fileSummary={
-            checked.length === 0
-              ? `Full snapshot (${selected.fileCount.toLocaleString()} files)`
-              : `${checked.length} selected item${checked.length === 1 ? '' : 's'}`
-          }
-          bytes={selectedBytes()}
+          paths={checked}
+          fullSnapshotBytes={selected.totalSize}
+          fullSnapshotFileCount={selected.fileCount}
+          knownFiles={files}
           destination={restoreDest}
           onConfirm={confirmRestoreJob}
           onClose={() => setConfirmRestore(false)}
