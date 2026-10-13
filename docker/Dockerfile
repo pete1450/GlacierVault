@@ -1,5 +1,5 @@
 # ── Stage 1: Build Go API ───────────────────────────────────────────────────
-FROM golang:1.26-trixie AS go-builder
+FROM golang:1.27-trixie AS go-builder
 
 WORKDIR /build/api
 COPY api/go.mod ./
