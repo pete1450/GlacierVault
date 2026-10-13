@@ -1,3 +1,6 @@
+# Outdated
+Leaving this as an artifact because yeah, it was made with AI but note that it is the initial prompt and a lot has changed since the beginning. Don't assume anything in here is still true.
+
 # Plan: GlacierVault Implementation
 
 ## TL;DR

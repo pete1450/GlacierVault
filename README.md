@@ -1,4 +1,5 @@
 # GlacierVault
+<img src="glaciervaultlogo.png" alt="logo" width="250">
 
 [![CI](https://github.com/pete1450/GlacierVault/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/pete1450/GlacierVault/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://github.com/pete1450/GlacierVault/blob/main/LICENSE)
@@ -6,7 +7,7 @@
 [![Dependabot](https://img.shields.io/badge/dependabot-enabled-025E8C?logo=dependabot&logoColor=white)](https://github.com/pete1450/GlacierVault/blob/main/.github/dependabot.yml)
 [![Last commit](https://img.shields.io/github/last-commit/pete1450/GlacierVault)](https://github.com/pete1450/GlacierVault/commits/main)
 
-A self-hosted backup appliance that makes cheap AWS Glacier Deep Archive as simple as possible: you bring AWS credentials, it handles the rest. One Docker container with a web UI — it deploys the AWS infrastructure with CDK, schedules encrypted [Rustic](https://github.com/rustic-rs/rustic) backups into Deep Archive, and walks restores through Glacier retrieval (with a private CloudFront distribution for free-egress downloads and Apprise notifications when jobs finish).
+A self-hosted backup appliance that makes cheap AWS Glacier Deep Archive as simple as possible: you bring AWS credentials, it handles the rest. One Docker container with a web UI — it deploys the AWS infrastructure with CDK, schedules encrypted [Rustic](https://github.com/rustic-rs/rustic) backups into Deep Archive, and walks restores through Glacier retrieval with a private CloudFront distribution for free-egress downloads and Apprise notifications when jobs finish.
 
 ## Built on
 
@@ -15,29 +16,19 @@ A self-hosted backup appliance that makes cheap AWS Glacier Deep Archive as simp
 - [warmup-s3-archives](https://gitlab.com/philipmw/warmup-s3-archives) — restores archived S3 objects via Batch Operations before download
 - [Apprise](https://github.com/caronc/apprise) — notification dispatch (Discord, Slack, Telegram, email, ntfy, webhooks, …)
 
-## ⚠️ Work in progress
-
 
 Thought process
  - Deep archive is dirt-cheap but retrieval can be a pain
  - Bulk retrieval is cheap($2.50 per TB)
- - 100GB per month egress from AWS is free
- - PUT/GET request are the only thing that needs to be managed intelligently (still need to be optimized in this app)
+ - 1TB per month egress from AWS through Cloudfront is free
+ - PUT/GET request need to be managed intelligently 
  - Warmup process takes a while
  - Wouldn't it be nice to have this all in a single app
 
+<img width="900" alt="image" src="https://github.com/user-attachments/assets/ea0e41c0-9c51-4071-b240-ac97daf67864" />
+<img width="900" alt="image" src="https://github.com/user-attachments/assets/2a25e9a7-2b83-4184-8159-2c7a3614b07d" />
+<img width="900" alt="image" src="https://github.com/user-attachments/assets/2b22cf41-45e8-431c-b3dc-930db5a9702e" />
 
-The goal is to make AWS Deep Archive as simple as possible to non-AWS experts: you bring credentials, GlacierVault handles the rest.
-
----
-
-## THIS VERY MUCH A WORK-IN-PROGRESS REPO!
- - I've tested from backup to restore but it has been limited.
- - Do not rely on this project for your real backups yet!
- - I'd be very open to PRs if anyone wants to dig in.
-
-<img width="934" height="555" alt="image" src="https://github.com/user-attachments/assets/ea0e41c0-9c51-4071-b240-ac97daf67864" />
-<img width="1053" height="926" alt="image" src="https://github.com/user-attachments/assets/2a25e9a7-2b83-4184-8159-2c7a3614b07d" />
 
 ## Quick start
 
