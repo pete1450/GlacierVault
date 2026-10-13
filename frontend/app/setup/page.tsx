@@ -1,6 +1,6 @@
 'use client'
 import { useState } from 'react'
-import { validateCredentials, deployInfrastructure } from '@/lib/api'
+import { validateCredentials, deployInfrastructure, errMsg, type CostEstimate } from '@/lib/api'
 import { useRouter } from 'next/navigation'
 
 type Step = 'credentials' | 'validate' | 'deploy' | 'done'
@@ -11,8 +11,7 @@ export default function SetupPage() {
   const [step, setStep] = useState<Step>('credentials')
   const [creds, setCreds] = useState<Credentials>({ accessKey: '', secretKey: '', region: 'us-east-1', stackName: 'rustic-cold-backups' })
   const [identity, setIdentity] = useState('')
-  const [estimate, setEstimate] = useState<any>(null)
-  const [jobId, setJobId] = useState<number | null>(null)
+  const [estimate, setEstimate] = useState<CostEstimate | null>(null)
   const [logs, setLogs] = useState<string[]>([])
   const [error, setError] = useState('')
   const [readonlySnapshots, setReadonlySnapshots] = useState(false)
@@ -22,12 +21,12 @@ export default function SetupPage() {
     e.preventDefault()
     setError('')
     try {
-      const result: any = await validateCredentials(creds.accessKey, creds.secretKey, creds.region)
+      const result = await validateCredentials(creds.accessKey, creds.secretKey, creds.region)
       setIdentity(result.identity)
       setEstimate(result.estimate)
       setStep('validate')
-    } catch (err: any) {
-      setError(err.message)
+    } catch (err) {
+      setError(errMsg(err))
     }
   }
 
@@ -36,17 +35,16 @@ export default function SetupPage() {
     setStep('deploy')
     try {
       const result = await deployInfrastructure(creds.accessKey, creds.secretKey, creds.region, creds.stackName, readonlySnapshots)
-      setJobId(result.jobId)
       streamLogs(result.jobId)
-    } catch (err: any) {
-      setError(err.message)
+    } catch (err) {
+      setError(errMsg(err))
     }
   }
 
   function streamLogs(id: number) {
     const es = new EventSource(`/api/jobs/${id}/stream`)
     es.onmessage = e => setLogs(prev => [...prev, e.data])
-    es.addEventListener('done', (e: any) => {
+    es.addEventListener('done', (e: MessageEvent) => {
       es.close()
       if (e.data === 'completed') setStep('done')
       else setError('Deployment failed — check logs')
@@ -114,7 +112,7 @@ export default function SetupPage() {
                 <span className="text-gray-200 font-medium">Read-only snapshots</span>
                 <span className="block text-gray-500 text-xs mt-0.5">
                   Keeps the infrastructure append-only: the backup user is not granted
-                  permission to delete objects, so snapshots can't be deleted afterward
+                  permission to delete objects, so snapshots can&apos;t be deleted afterward
                   (protects against leaked credentials). Leave unchecked to allow snapshot
                   deletion — you can change this later in Settings.
                 </span>

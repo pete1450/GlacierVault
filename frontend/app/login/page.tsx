@@ -1,6 +1,6 @@
 'use client'
 import { useState } from 'react'
-import { login } from '@/lib/api'
+import { login, errMsg } from '@/lib/api'
 import { useRouter } from 'next/navigation'
 
 export default function LoginPage() {
@@ -16,8 +16,8 @@ export default function LoginPage() {
     try {
       await login(password)
       router.push('/')
-    } catch (err: any) {
-      setError(err.message || 'Login failed')
+    } catch (err) {
+      setError(errMsg(err) || 'Login failed')
     } finally {
       setLoading(false)
     }

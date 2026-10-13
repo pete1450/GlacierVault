@@ -6,6 +6,7 @@ import {
   listSnapshots, getSnapshotFiles, initiateRestore, deleteSnapshot,
   getStorage, pruneRepo,
   type Snapshot, type FileEntry, type StorageInfo,
+  errMsg,
 } from '@/lib/api'
 
 export default function SnapshotsPage() {
@@ -118,8 +119,8 @@ export default function SnapshotsPage() {
       const result = await initiateRestore(selected.id, checked, restoreDest)
       setRestoreMsg(`Restore job #${result.jobId} started.`)
       setChecked([])
-    } catch (err: any) {
-      setRestoreMsg(`Error: ${err.message}`)
+    } catch (err) {
+      setRestoreMsg(`Error: ${errMsg(err)}`)
     }
   }
 
@@ -142,8 +143,8 @@ export default function SnapshotsPage() {
         setChecked([])
       }
       refresh()
-    } catch (err: any) {
-      setNotice(`Delete failed: ${err.message}`)
+    } catch (err) {
+      setNotice(`Delete failed: ${errMsg(err)}`)
     } finally {
       setBusy(false)
     }
@@ -156,8 +157,8 @@ export default function SnapshotsPage() {
       await pruneRepo()
       setNotice('Repository pruned. Unreferenced data has been removed.')
       refresh()
-    } catch (err: any) {
-      setNotice(`Prune failed: ${err.message}`)
+    } catch (err) {
+      setNotice(`Prune failed: ${errMsg(err)}`)
     } finally {
       setBusy(false)
     }

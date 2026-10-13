@@ -8,6 +8,7 @@ import {
   grantSnapshotDeletePermission, revokeSnapshotDeletePermission, getSnapshotDeleteStatus,
   getNotificationConfig, saveNotificationConfig, testNotification,
   getRestoreTuning, saveRestoreTuning,
+  errMsg,
 } from '@/lib/api'
 
 function Toggle({ on, onChange, label }: { on: boolean; onChange: (v: boolean) => void; label: string }) {
@@ -102,8 +103,8 @@ export default function SettingsPage() {  const router = useRouter()
         if (!s.provisioning) break
       }
       await refreshCf()
-    } catch (err: any) {
-      setCfMsg(`Error: ${err.message}`)
+    } catch (err) {
+      setCfMsg(`Error: ${errMsg(err)}`)
     } finally {
       setCfBusy(false)
     }
@@ -115,8 +116,8 @@ export default function SettingsPage() {  const router = useRouter()
       await disableCloudFront()
       setCfMsg('Free-egress path disabled. Restores will use paid S3 egress.')
       await refreshCf()
-    } catch (err: any) {
-      setCfMsg(`Error: ${err.message}`)
+    } catch (err) {
+      setCfMsg(`Error: ${errMsg(err)}`)
     }
   }
 
@@ -129,8 +130,8 @@ export default function SettingsPage() {  const router = useRouter()
       setIamAccessKey(''); setIamSecretKey('')
       setIamGranted(true)
       setIamMsg('Permission granted — snapshot deletion should work now.')
-    } catch (err: any) {
-      setIamMsg(`Error: ${err.message}`)
+    } catch (err) {
+      setIamMsg(`Error: ${errMsg(err)}`)
     } finally {
       setIamBusy(false)
     }
@@ -144,8 +145,8 @@ export default function SettingsPage() {  const router = useRouter()
       setIamAccessKey(''); setIamSecretKey('')
       setIamGranted(false)
       setIamMsg('Permission revoked — snapshots are read-only (append-only) again.')
-    } catch (err: any) {
-      setIamMsg(`Error: ${err.message}`)
+    } catch (err) {
+      setIamMsg(`Error: ${errMsg(err)}`)
     } finally {
       setIamBusy(false)
     }
@@ -163,8 +164,8 @@ export default function SettingsPage() {  const router = useRouter()
       await changePassword(currentPw, newPw)
       setPwMsg('Password changed.')
       setCurrentPw(''); setNewPw(''); setConfirmPw('')
-    } catch (err: any) {
-      setPwMsg(`Error: ${err.message}`)
+    } catch (err) {
+      setPwMsg(`Error: ${errMsg(err)}`)
     } finally {
       setPwSaving(false)
     }
@@ -175,8 +176,8 @@ export default function SettingsPage() {  const router = useRouter()
     try {
       await rebuildCatalog()
       setRebuildMsg('Catalog rebuild started in the background.')
-    } catch (err: any) {
-      setRebuildMsg(`Error: ${err.message}`)
+    } catch (err) {
+      setRebuildMsg(`Error: ${errMsg(err)}`)
     }
   }
 
@@ -200,8 +201,8 @@ export default function SettingsPage() {  const router = useRouter()
     try {
       await saveRestoreTuning({ downloadGbPerDay: rate })
       setTuningMsg('Saved. Applies to restores started from now on.')
-    } catch (err: any) {
-      setTuningMsg(`Error: ${err.message}`)
+    } catch (err) {
+      setTuningMsg(`Error: ${errMsg(err)}`)
     } finally {
       setTuningSaving(false)
     }
@@ -218,8 +219,8 @@ export default function SettingsPage() {  const router = useRouter()
         notifyRestoreCompleted: swRestore,
       })
       setNotifyMsg('Notification settings saved.')
-    } catch (err: any) {
-      setNotifyMsg(`Error: ${err.message}`)
+    } catch (err) {
+      setNotifyMsg(`Error: ${errMsg(err)}`)
     } finally {
       setNotifySaving(false)
     }
@@ -231,8 +232,8 @@ export default function SettingsPage() {  const router = useRouter()
     try {
       await testNotification(destinationList())
       setNotifyMsg('Test notification sent — check your destinations.')
-    } catch (err: any) {
-      setNotifyMsg(`Error: ${err.message}`)
+    } catch (err) {
+      setNotifyMsg(`Error: ${errMsg(err)}`)
     } finally {
       setNotifyTesting(false)
     }
@@ -264,7 +265,7 @@ export default function SettingsPage() {  const router = useRouter()
           <h2 className="font-semibold text-lg">Free-egress restores (CloudFront)</h2>
           <p className="text-sm text-gray-400">
             Restore downloads can go through a private CloudFront distribution instead of
-            directly from S3, so they consume CloudFront's monthly free data-transfer
+            directly from S3, so they consume CloudFront&apos;s monthly free data-transfer
             allowance (1 TB/month, shared across your account) instead of paid S3 egress.
             The bucket stays private: the distribution requires signed URLs, which are
             minted inside the appliance by a localhost-only proxy and never leave it.
@@ -295,7 +296,7 @@ export default function SettingsPage() {  const router = useRouter()
           {!cf?.enabled && !cf?.provisioning && (
             <details className="max-w-sm">
               <summary className="text-sm text-gray-400 cursor-pointer hover:text-gray-200">
-                Manually provision (only if initial setup didn't)
+                Manually provision (only if initial setup didn&apos;t)
               </summary>
               <form onSubmit={handleCfEnable} className="space-y-3 mt-3">
                 <p className="text-sm text-gray-400">
@@ -351,7 +352,7 @@ export default function SettingsPage() {  const router = useRouter()
           <p className="text-sm text-gray-400">
             Deleting snapshots (<code className="text-gray-300">rustic forget</code>) and pruning
             need <code className="text-gray-300">s3:DeleteObject</code> on the backup buckets, but
-            the infrastructure is append-only by design and doesn't grant it. Granting it
+            the infrastructure is append-only by design and doesn&apos;t grant it. Granting it
             weakens that protection (a leaked backup credential could delete archives) —
             revoking restores it. Either way takes effect immediately.
           </p>
@@ -446,7 +447,7 @@ export default function SettingsPage() {  const router = useRouter()
               <Toggle on={swWarmup} onChange={setSwWarmup} label="Warmup complete" />
               <div>
                 <div className="text-sm">Warmup complete</div>
-                <div className="text-xs text-gray-500">When Glacier finishes thawing a restore's packs and the download starts.</div>
+                <div className="text-xs text-gray-500">When Glacier finishes thawing a restore&apos;s packs and the download starts.</div>
               </div>
             </div>
             <div className="flex items-center gap-3">

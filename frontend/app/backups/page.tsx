@@ -3,7 +3,8 @@ import { useEffect, useState } from 'react'
 import Nav from '@/components/Nav'
 import {
   listBackups, createBackup, updateBackup, deleteBackup, runBackupNow,
-  type BackupDef, type CreateBackupInput,
+  type BackupDef, type CreateBackupInput, type UpdateBackupInput,
+  errMsg,
 } from '@/lib/api'
 
 const NAMED_SCHEDULES = [
@@ -100,17 +101,31 @@ export default function BackupsPage() {
     setSaving(true)
     setError('')
     try {
-      const { schedulePreset, password, ...payload } = form
+      // Strip the UI-only schedulePreset before sending; the API doesn't know it.
+      const payload: CreateBackupInput = {
+        name: form.name,
+        sourcePaths: form.sourcePaths,
+        schedule: form.schedule,
+        compressionLevel: form.compressionLevel,
+        password: form.password,
+      }
       if (editingId === null) {
-        await createBackup({ ...payload, password })
+        await createBackup(payload)
       } else {
-        await updateBackup(editingId, payload)
+        // Updates don't take a password.
+        const updatePayload: UpdateBackupInput = {
+          name: form.name,
+          sourcePaths: form.sourcePaths,
+          schedule: form.schedule,
+          compressionLevel: form.compressionLevel,
+        }
+        await updateBackup(editingId, updatePayload)
       }
       setShowForm(false)
       setEditingId(null)
       refresh()
-    } catch (err: any) {
-      setError(err.message)
+    } catch (err) {
+      setError(errMsg(err))
     } finally {
       setSaving(false)
     }
@@ -118,7 +133,7 @@ export default function BackupsPage() {
 
   async function handleToggleEnabled(b: BackupDef) {
     try {
-      await updateBackup(b.id, { enabled: !b.enabled } as any)
+      await updateBackup(b.id, { enabled: !b.enabled })
       refresh()
     } catch {}
   }
@@ -129,8 +144,8 @@ export default function BackupsPage() {
     try {
       const result = await runBackupNow(id)
       setRunMsg(`Job #${result.jobId} started`)
-    } catch (err: any) {
-      setRunMsg(`Error: ${err.message}`)
+    } catch (err) {
+      setRunMsg(`Error: ${errMsg(err)}`)
     } finally {
       setRunningId(null)
     }
@@ -142,8 +157,8 @@ export default function BackupsPage() {
       await deleteBackup(id)
       setDeleteConfirm(null)
       refresh()
-    } catch (err: any) {
-      setDeleteError(`Delete failed: ${err.message}`)
+    } catch (err) {
+      setDeleteError(`Delete failed: ${errMsg(err)}`)
     }
   }
 
