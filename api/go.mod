@@ -1,6 +1,6 @@
 module github.com/glaciervault/api
 
-go 1.26
+go 1.26.0
 
 toolchain go1.26.9
 
@@ -18,7 +18,7 @@ require (
 	github.com/golang-migrate/migrate/v4 v4.17.1
 	github.com/mattn/go-sqlite3 v1.14.52
 	github.com/robfig/cron/v3 v3.0.1
-	golang.org/x/crypto v0.23.0
+	golang.org/x/crypto v0.58.0
 )
 
 require (
