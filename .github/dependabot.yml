@@ -1,0 +1,22 @@
+version: 2
+updates:
+  # Go modules
+  - package-ecosystem: gomod
+    directory: /api
+    schedule:
+      interval: weekly
+  # Frontend dependencies
+  - package-ecosystem: npm
+    directory: /frontend
+    schedule:
+      interval: weekly
+  # Docker base images
+  - package-ecosystem: docker
+    directory: /docker
+    schedule:
+      interval: weekly
+  # GitHub Actions used by workflows
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
