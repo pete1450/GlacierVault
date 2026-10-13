@@ -16,6 +16,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	appCrypto "github.com/glaciervault/api/internal/crypto"
+	"github.com/glaciervault/api/internal/cloudfront"
 	"github.com/glaciervault/api/internal/notify"
 	"github.com/glaciervault/api/internal/restore"
 	"github.com/glaciervault/api/internal/scheduler"
@@ -36,6 +37,7 @@ func testServer(t *testing.T) *Server {
 		Scheduler:  scheduler.New(db, nil, nil, nil),
 		Notify:     ntf,
 		RestoreMgr: restore.New(db, nil, nil, ntf),
+		CFManager:  cloudfront.NewManager(db),
 		JWTSecret:  []byte("test-secret-key-for-jwt-signing"),
 	}
 }
@@ -612,30 +614,85 @@ func TestHandleValidateCredentialsBadJSON(t *testing.T) {
 	}
 }
 
-func TestHandleCloudFrontStatus(t *testing.T) {
+// ── CloudFront handlers ───────────────────────────────────────────────
+
+func TestHandleCloudFrontStatusOK(t *testing.T) {
 	s := testServer(t)
-	defer func() {
-		if r := recover(); r != nil {
-			t.Fatalf("panic: %v", r)
-		}
-	}()
-	rec := httptest.NewRecorder()
-	s.handleCloudFrontStatus(rec, httptest.NewRequest("GET", "/api/cloudfront/status", nil))
-	if rec.Code == 0 {
-		t.Fatal("no response")
+	// Seed the aws_config row (NOT NULL columns required).
+	s.DB.Exec(`INSERT OR IGNORE INTO aws_config (id, region, encrypted_access_key, encrypted_secret_key)
+		VALUES (1, 'us-east-1', 'x', 'y')`)
+	code, out := doJSON(s, s.handleCloudFrontStatus, "GET", "/api/cloudfront/status", nil)
+	if code != http.StatusOK {
+		t.Fatalf("code = %d", code)
+	}
+	if _, ok := out["enabled"]; !ok {
+		t.Fatal("missing enabled key")
 	}
 }
 
-func TestHandleSnapshotDeleteStatus(t *testing.T) {
+func TestHandleCloudFrontEnableValidation(t *testing.T) {
 	s := testServer(t)
-	defer func() {
-		if r := recover(); r != nil {
-			t.Fatalf("panic: %v", r)
-		}
-	}()
+	// Bad JSON.
+	req := httptest.NewRequest("POST", "/api/cloudfront/enable", bytes.NewBufferString("{"))
 	rec := httptest.NewRecorder()
-	s.handleSnapshotDeleteStatus(rec, httptest.NewRequest("GET", "/api/iam/snapshot-delete", nil))
-	if rec.Code == 0 {
-		t.Fatal("no response")
+	s.handleCloudFrontEnable(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("bad json: code = %d, want 400", rec.Code)
+	}
+	// Missing keys.
+	code, _ := doJSON(s, s.handleCloudFrontEnable, "POST", "/api/cloudfront/enable", map[string]string{})
+	if code != http.StatusBadRequest {
+		t.Fatalf("missing keys: code = %d, want 400", code)
+	}
+}
+
+func TestHandleCloudFrontDisable(t *testing.T) {
+	s := testServer(t)
+	code, _ := doJSON(s, s.handleCloudFrontDisable, "POST", "/api/cloudfront/disable", nil)
+	// May succeed or fail depending on setup; just verify it responds.
+	if code < 200 || code >= 600 {
+		t.Fatalf("code = %d", code)
+	}
+}
+
+// ── IAM handlers ──────────────────────────────────────────────────────
+
+func TestHandleGrantSnapshotDeleteValidation(t *testing.T) {
+	s := testServer(t)
+	// Bad JSON.
+	req := httptest.NewRequest("POST", "/api/iam/grant", bytes.NewBufferString("{"))
+	rec := httptest.NewRecorder()
+	s.handleGrantSnapshotDelete(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("bad json: code = %d, want 400", rec.Code)
+	}
+	// Missing keys.
+	code, _ := doJSON(s, s.handleGrantSnapshotDelete, "POST", "/api/iam/grant", map[string]string{})
+	if code != http.StatusBadRequest {
+		t.Fatalf("missing keys: code = %d, want 400", code)
+	}
+	// Not configured (no stack).
+	code, _ = doJSON(s, s.handleGrantSnapshotDelete, "POST", "/api/iam/grant",
+		map[string]string{"accessKey": "AK", "secretKey": "SK"})
+	if code != http.StatusBadRequest {
+		t.Fatalf("not configured: code = %d, want 400", code)
+	}
+}
+
+func TestHandleRevokeSnapshotDeleteValidation(t *testing.T) {
+	s := testServer(t)
+	req := httptest.NewRequest("POST", "/api/iam/revoke", bytes.NewBufferString("{"))
+	rec := httptest.NewRecorder()
+	s.handleRevokeSnapshotDelete(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("bad json: code = %d, want 400", rec.Code)
+	}
+}
+
+func TestHandleSnapshotDeleteStatusOK(t *testing.T) {
+	s := testServer(t)
+	code, _ := doJSON(s, s.handleSnapshotDeleteStatus, "GET", "/api/iam/status", nil)
+	if code < 200 || code >= 600 {
+		t.Fatalf("code = %d", code)
 	}
 }

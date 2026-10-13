@@ -31,12 +31,21 @@ func openMigratedDB(t *testing.T) *sql.DB {
 		t.Fatalf("open db: %v", err)
 	}
 	t.Cleanup(func() { db.Close() })
-	schema, err := os.ReadFile("../db/migrations/001_initial_schema.up.sql")
-	if err != nil {
-		t.Fatalf("read migration: %v", err)
-	}
-	if _, err := db.Exec(string(schema)); err != nil {
-		t.Fatalf("apply migration: %v", err)
+	// Apply all migrations in order.
+	for _, mig := range []string{
+		"001_initial_schema.up.sql",
+		"002_repo_password.up.sql",
+		"003_warmup_infra.up.sql",
+		"004_cloudfront_egress.up.sql",
+		"005_restore_batch_job_id.up.sql",
+	} {
+		schema, err := os.ReadFile("../db/migrations/" + mig)
+		if err != nil {
+			t.Fatalf("read migration %s: %v", mig, err)
+		}
+		if _, err := db.Exec(string(schema)); err != nil {
+			t.Fatalf("apply migration %s: %v", mig, err)
+		}
 	}
 	return db
 }
