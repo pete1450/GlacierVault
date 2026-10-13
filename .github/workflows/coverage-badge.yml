@@ -1,0 +1,61 @@
+name: Coverage Badge
+
+on:
+  push:
+    branches: [main, ui/glacier-refresh]
+    paths:
+      - 'api/**'
+
+permissions:
+  contents: write
+
+jobs:
+  badge:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: '1.26.9'
+          cache: true
+          cache-dependency-path: api/go.sum
+
+      - name: Compute coverage
+        working-directory: api
+        run: |
+          go test -coverprofile=coverage.out ./... > /dev/null 2>&1
+          COVERAGE=$(python3 coverage_filtered.py coverage.out | grep -oP '\d+\.\d+(?=%)')
+          echo "COVERAGE=${COVERAGE}" >> $GITHUB_ENV
+          echo "Coverage: ${COVERAGE}%"
+
+      - name: Generate badge
+        run: |
+          COV="${{ env.COVERAGE }}"
+          # Color: green >=70, yellow >=40, red below.
+          if awk "BEGIN {exit !($COV >= 70)}"; then COLOR="#4c1"; 
+          elif awk "BEGIN {exit !($COV >= 40)}"; then COLOR="#dfb317";
+          else COLOR="#e05d44"; fi
+          # Simple SVG badge.
+          cat > coverage.svg << EOF
+          <svg xmlns="http://www.w3.org/2000/svg" width="104" height="20">
+            <rect width="104" height="20" rx="3" fill="#555"/>
+            <rect x="62" width="42" height="20" rx="3" fill="${COLOR}"/>
+            <rect x="62" width="42" height="20" fill="${COLOR}"/>
+            <rect x="60" width="4" height="20" fill="${COLOR}"/>
+            <g fill="#fff" text-anchor="middle" font-family="DejaVu Sans,Verdana,Geneva,sans-serif" font-size="11">
+              <text x="31" y="15">coverage</text>
+              <text x="83" y="15">${COV}%</text>
+            </g>
+          </svg>
+          EOF
+          echo "Generated badge for ${COV}%"
+
+      - name: Commit badge
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add coverage.svg
+          git diff --staged --quiet || git commit -m "Update coverage badge (${{ env.COVERAGE }}%)"
+          git push

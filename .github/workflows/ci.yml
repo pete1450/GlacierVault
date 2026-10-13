@@ -43,6 +43,12 @@ jobs:
       - name: Test
         run: go test ./...
 
+      - name: Coverage gate
+        run: |
+          go test -coverprofile=coverage.out ./... > /dev/null 2>&1
+          python3 coverage_filtered.py coverage.out --threshold 55
+        working-directory: api
+
       - name: Vulnerability scan
         run: |
           go install golang.org/x/vuln/cmd/govulncheck@latest
