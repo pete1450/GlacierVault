@@ -2,6 +2,7 @@
 <img src="glaciervaultlogo.png" alt="logo" width="250">
 
 [![CI](https://github.com/pete1450/GlacierVault/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/pete1450/GlacierVault/actions/workflows/ci.yml)
+[![Coverage](./coverage.svg)](https://github.com/pete1450/GlacierVault/actions/workflows/coverage-badge.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://github.com/pete1450/GlacierVault/blob/main/LICENSE)
 [![Latest tag](https://img.shields.io/github/v/tag/pete1450/GlacierVault?label=version)](https://github.com/pete1450/GlacierVault/tags)
 [![Dependabot](https://img.shields.io/badge/dependabot-enabled-025E8C?logo=dependabot&logoColor=white)](https://github.com/pete1450/GlacierVault/blob/main/.github/dependabot.yml)

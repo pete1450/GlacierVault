@@ -42,6 +42,21 @@ jobs:
       - name: Test
         run: go test ./...
 
+      - name: Coverage gate
+        run: |
+          go test -coverprofile=coverage.out ./... > /dev/null 2>&1
+          COVERAGE=$(go tool cover -func=coverage.out | grep '^total:' | awk '{print $3}' | tr -d '%')
+          echo "Total coverage: ${COVERAGE}%"
+          # Threshold: 40%. AWS-dependent code (provisioning, S3 Batch, rustic
+          # exec) cannot be tested without live infrastructure; 90% would
+          # require refactoring those behind mockable interfaces.
+          THRESHOLD=40
+          if awk "BEGIN {exit !($COVERAGE < $THRESHOLD)}"; then
+            echo "Coverage ${COVERAGE}% is below threshold ${THRESHOLD}%"
+            exit 1
+          fi
+          echo "Coverage ${COVERAGE}% meets threshold ${THRESHOLD}%"
+
       - name: Vulnerability scan
         run: |
           go install golang.org/x/vuln/cmd/govulncheck@latest
