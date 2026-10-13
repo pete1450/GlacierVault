@@ -696,3 +696,115 @@ func TestHandleSnapshotDeleteStatusOK(t *testing.T) {
 		t.Fatalf("code = %d", code)
 	}
 }
+
+// ── List handlers with data ───────────────────────────────────────────
+
+func TestHandleListJobsWithData(t *testing.T) {
+	s := testServer(t)
+	defID := createBackupDef(t, s, "docs")
+	if _, err := s.DB.Exec(`INSERT INTO backup_jobs (backup_def_id, started_at, status, bytes_transferred)
+		VALUES (?, '2026-10-13 10:00:00', 'completed', 1024)`, defID); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	rec := doRequest(s, s.handleListJobs, "GET", "/api/jobs", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("code = %d", rec.Code)
+	}
+	var out []map[string]any
+	if err := json.NewDecoder(rec.Body).Decode(&out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(out) != 1 {
+		t.Fatalf("got %d jobs, want 1", len(out))
+	}
+	if out[0]["status"] != "completed" {
+		t.Fatalf("status = %v", out[0]["status"])
+	}
+	// With limit param.
+	rec = doRequest(s, s.handleListJobs, "GET", "/api/jobs?limit=10", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("limit: code = %d", rec.Code)
+	}
+}
+
+func TestHandleListSnapshotsWithData(t *testing.T) {
+	s := testServer(t)
+	defID := createBackupDef(t, s, "docs")
+	if _, err := s.DB.Exec(`INSERT INTO snapshots (snapshot_id, backup_def_id, hostname, backup_time)
+		VALUES ('snap1', ?, 'host', '2026-10-13 00:00:00')`, defID); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	rec := doRequest(s, s.handleListSnapshots, "GET", "/api/snapshots", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("code = %d", rec.Code)
+	}
+	var out []map[string]any
+	json.NewDecoder(rec.Body).Decode(&out)
+	if len(out) != 1 {
+		t.Fatalf("got %d snapshots, want 1", len(out))
+	}
+}
+
+func TestHandleListRestoresWithData(t *testing.T) {
+	s := testServer(t)
+	defID := createBackupDef(t, s, "docs")
+	res, err := s.DB.Exec(`INSERT INTO snapshots (snapshot_id, backup_def_id, hostname, backup_time)
+		VALUES ('snap1', ?, 'host', '2026-10-13 00:00:00')`, defID)
+	if err != nil {
+		t.Fatalf("insert snapshot: %v", err)
+	}
+	snapRowID, _ := res.LastInsertId()
+	if _, err := s.DB.Exec(`INSERT INTO restore_jobs (snapshot_id, requested_paths, destination, status, created_at)
+		VALUES (?, '[]', '/tmp/x', 'completed', '2026-10-13 10:00:00')`, snapRowID); err != nil {
+		t.Fatalf("insert restore: %v", err)
+	}
+	rec := doRequest(s, s.handleListRestores, "GET", "/api/restores", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("code = %d", rec.Code)
+	}
+	var out []map[string]any
+	json.NewDecoder(rec.Body).Decode(&out)
+	if len(out) != 1 {
+		t.Fatalf("got %d restores, want 1", len(out))
+	}
+}
+
+func TestHandleGetJobWithData(t *testing.T) {
+	s := testServer(t)
+	defID := createBackupDef(t, s, "docs")
+	res, err := s.DB.Exec(`INSERT INTO backup_jobs (backup_def_id, started_at, status)
+		VALUES (?, '2026-10-13 10:00:00', 'running')`, defID)
+	if err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	id, _ := res.LastInsertId()
+	req := withChiParam(httptest.NewRequest("GET", "/api/jobs/1", nil), "id", strconv.FormatInt(id, 10))
+	rec := httptest.NewRecorder()
+	s.handleGetJob(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("code = %d", rec.Code)
+	}
+}
+
+func TestHandleGetRestoreWithData(t *testing.T) {
+	s := testServer(t)
+	defID := createBackupDef(t, s, "docs")
+	res, err := s.DB.Exec(`INSERT INTO snapshots (snapshot_id, backup_def_id, hostname, backup_time)
+		VALUES ('snap1', ?, 'host', '2026-10-13 00:00:00')`, defID)
+	if err != nil {
+		t.Fatalf("insert snapshot: %v", err)
+	}
+	snapRowID, _ := res.LastInsertId()
+	res, err = s.DB.Exec(`INSERT INTO restore_jobs (snapshot_id, requested_paths, destination, status, created_at)
+		VALUES (?, '[]', '/tmp/x', 'completed', '2026-10-13 10:00:00')`, snapRowID)
+	if err != nil {
+		t.Fatalf("insert restore: %v", err)
+	}
+	id, _ := res.LastInsertId()
+	req := withChiParam(httptest.NewRequest("GET", "/api/restores/1", nil), "id", strconv.FormatInt(id, 10))
+	rec := httptest.NewRecorder()
+	s.handleGetRestore(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("code = %d", rec.Code)
+	}
+}
