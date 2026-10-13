@@ -1,26 +1,86 @@
 @import "tailwindcss";
 
+/* Class-based dark mode for Tailwind v4 (default is prefers-color-scheme). */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/*
+ * GlacierVault theme tokens — "Abyss" (dark) and "Icefield" (light).
+ * Palette sampled from frontend/public/logo.png.
+ * Pages use semantic utilities (bg-base, text-muted, border-line, bg-accent,
+ * text-ok, ...) so flipping the .dark class on <html> re-themes everything.
+ */
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  /* Icefield (light) */
+  --base: #eaf3fa;
+  --surface: #ffffff;
+  --raised: #e2eff9;
+  --emboss: #cfe6f7;
+  --ink: #0b2237;
+  --body: #2e4a63;
+  --muted: #4e6e8c;
+  --faint: #7e9bb5;
+  --line: #c4dff2;
+  --accent: #1b7cc4;
+  --accent-strong: #2086d6;
+  --accent-deep: #155e96;
+  --accent-soft: rgba(27, 124, 196, 0.1);
+  --ok: #1e9e5c;
+  --warn: #b97a1a;
+  --err: #c74534;
+}
+
+.dark {
+  /* Abyss (dark) */
+  --base: #071522;
+  --surface: #0b1f33;
+  --raised: #10293f;
+  --emboss: #1a3a5c;
+  --ink: #f2f8fd;
+  --body: #c4d6e8;
+  --muted: #8ca9c4;
+  --faint: #5b7a96;
+  --line: #1d3a58;
+  --accent: #45a5ec;
+  --accent-strong: #7ad7fa;
+  --accent-deep: #1b7cc4;
+  --accent-soft: rgba(69, 165, 236, 0.13);
+  --ok: #2fbf71;
+  --warn: #e8a13d;
+  --err: #e5604f;
 }
 
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
+  --color-base: var(--base);
+  --color-surface: var(--surface);
+  --color-raised: var(--raised);
+  --color-emboss: var(--emboss);
+  --color-ink: var(--ink);
+  --color-body: var(--body);
+  --color-muted: var(--muted);
+  --color-faint: var(--faint);
+  --color-line: var(--line);
+  --color-accent: var(--accent);
+  --color-accent-strong: var(--accent-strong);
+  --color-accent-deep: var(--accent-deep);
+  --color-accent-soft: var(--accent-soft);
+  --color-ok: var(--ok);
+  --color-warn: var(--warn);
+  --color-err: var(--err);
+  /* Glacier brand scale (theme-independent) */
+  --color-glacier-100: #d9f0fd;
+  --color-glacier-200: #b8e4fd;
+  --color-glacier-300: #7ad7fa;
+  --color-glacier-400: #45a5ec;
+  --color-glacier-500: #2086d6;
+  --color-glacier-600: #1b7cc4;
+  --color-glacier-700: #155e96;
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
-}
-
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: var(--base);
+  color: var(--ink);
+  font-family: var(--font-geist-sans), Arial, Helvetica, sans-serif;
+  transition: background-color 0.25s ease, color 0.25s ease;
 }

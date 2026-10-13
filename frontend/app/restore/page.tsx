@@ -1,6 +1,6 @@
 'use client'
 import { useEffect, useState } from 'react'
-import Nav from '@/components/Nav'
+import Shell from '@/components/Shell'
 import { listRestores, getRestore, type RestoreJob } from '@/lib/api'
 
 const STAGES = [
@@ -23,13 +23,13 @@ const STAGE_LABELS: Record<string, string> = {
 }
 
 const STATUS_COLORS: Record<string, string> = {
-  queued: 'bg-gray-700 text-gray-300 border-gray-600',
-  warmup_requested: 'bg-yellow-500/20 text-yellow-300 border-yellow-500/30',
-  retrieval_in_progress: 'bg-blue-500/20 text-blue-300 border-blue-500/30',
+  queued: 'bg-raised text-body border-line',
+  warmup_requested: 'bg-warn/20 text-warn border-warn/30',
+  retrieval_in_progress: 'bg-accent/20 text-accent-strong border-accent/30',
   retrieval_complete: 'bg-teal-500/20 text-teal-300 border-teal-500/30',
-  restoring: 'bg-purple-500/20 text-purple-300 border-purple-500/30',
-  completed: 'bg-green-500/20 text-green-300 border-green-500/30',
-  failed: 'bg-red-500/20 text-red-300 border-red-500/30',
+  restoring: 'bg-accent-soft text-accent-strong border-accent/30',
+  completed: 'bg-ok/15 text-ok border-ok/30',
+  failed: 'bg-err/20 text-err border-err/30',
 }
 
 const TERMINAL = new Set(['completed', 'failed'])
@@ -83,38 +83,38 @@ export default function RestorePage() {
   })()
 
   return (
-    <div className="min-h-screen bg-gray-950 text-white">
-      <Nav />
-      <div className="border-b border-gray-800 px-6 py-4">
+    <Shell>
+      <div className="space-y-6">
+      <div className="border-b border-line px-6 py-4">
         <h1 className="text-xl font-semibold">Restores</h1>
-        <p className="text-sm text-gray-400 mt-0.5">Glacier retrieval and restore progress</p>
+        <p className="text-sm text-muted mt-0.5">Glacier retrieval and restore progress</p>
       </div>
 
       {loading ? (
-        <div className="flex items-center justify-center h-64 text-gray-500">Loading…</div>
+        <div className="flex items-center justify-center h-64 text-muted">Loading…</div>
       ) : jobs.length === 0 ? (
-        <div className="flex flex-col items-center justify-center h-64 text-gray-500 gap-2">
+        <div className="flex flex-col items-center justify-center h-64 text-muted gap-2">
           <p>No restore jobs yet.</p>
           <p className="text-sm">Start one from the Snapshots page.</p>
         </div>
       ) : (
         <div className="flex h-[calc(100vh-137px)]">
           {/* Job list */}
-          <div className="w-96 shrink-0 border-r border-gray-800 overflow-y-auto">
+          <div className="w-96 shrink-0 border-r border-line overflow-y-auto">
             {jobs.map(j => (
               <button
                 key={j.id}
                 onClick={() => setSelectedId(j.id)}
-                className={`w-full text-left px-4 py-3 border-b border-gray-800 hover:bg-gray-800/50 transition-colors ${selectedId === j.id ? 'bg-gray-800/70' : ''}`}
+                className={`w-full text-left px-4 py-3 border-b border-line hover:bg-raised/50 transition-colors ${selectedId === j.id ? 'bg-raised/70' : ''}`}
               >
                 <div className="flex items-center gap-3">
-                  <span className="text-gray-400 text-xs font-mono w-8 shrink-0">#{j.id}</span>
-                  <span className={`text-xs px-2 py-0.5 rounded border font-medium ${STATUS_COLORS[j.status] ?? 'bg-gray-700 text-gray-300 border-gray-600'}`}>
+                  <span className="text-muted text-xs font-mono w-8 shrink-0">#{j.id}</span>
+                  <span className={`text-xs px-2 py-0.5 rounded border font-medium ${STATUS_COLORS[j.status] ?? 'bg-raised text-body border-line'}`}>
                     {STAGE_LABELS[j.status] ?? j.status}
                   </span>
                 </div>
-                <p className="mt-1 ml-11 text-xs text-gray-400 font-mono truncate">→ {j.destination}</p>
-                <p className="ml-11 text-xs text-gray-600">{new Date(j.createdAt).toLocaleString()}</p>
+                <p className="mt-1 ml-11 text-xs text-muted font-mono truncate">→ {j.destination}</p>
+                <p className="ml-11 text-xs text-faint">{new Date(j.createdAt).toLocaleString()}</p>
               </button>
             ))}
           </div>
@@ -141,17 +141,17 @@ export default function RestorePage() {
                         <div className="flex flex-col items-center gap-1">
                           <div className={`w-6 h-6 rounded-full border-2 flex items-center justify-center text-[10px] font-bold ${
                             reached
-                              ? current ? 'border-blue-400 bg-blue-500/30 text-blue-200 animate-pulse' : 'border-green-500 bg-green-500/20 text-green-300'
-                              : 'border-gray-700 text-gray-600'
+                              ? current ? 'border-accent bg-accent-soft text-accent-strong animate-pulse' : 'border-ok bg-ok/15 text-ok'
+                              : 'border-line text-faint'
                           }`}>
                             {reached && !current ? '✓' : i + 1}
                           </div>
-                          <span className={`text-[10px] text-center leading-tight ${reached ? 'text-gray-300' : 'text-gray-600'}`}>
+                          <span className={`text-[10px] text-center leading-tight ${reached ? 'text-body' : 'text-faint'}`}>
                             {STAGE_LABELS[s]}
                           </span>
                         </div>
                         {i < STAGES.length - 1 && (
-                          <div className={`h-0.5 flex-1 mx-1 mb-5 ${i < idx ? 'bg-green-600' : 'bg-gray-800'}`} />
+                          <div className={`h-0.5 flex-1 mx-1 mb-5 ${i < idx ? 'bg-ok' : 'bg-raised'}`} />
                         )}
                       </div>
                     )
@@ -168,48 +168,49 @@ export default function RestorePage() {
                     { label: 'Completed', value: detail.completedAt ? new Date(detail.completedAt).toLocaleString() : '—' },
                     { label: 'Paths', value: requestedPaths.length === 0 ? 'Full snapshot' : `${requestedPaths.length} selected` },
                   ].map(({ label, value, mono }) => (
-                    <div key={label} className="bg-gray-900 border border-gray-800 rounded p-3">
-                      <p className="text-xs text-gray-500 mb-1">{label}</p>
-                      <p className={`text-sm text-gray-200 ${mono ? 'font-mono break-all' : ''}`}>{value}</p>
+                    <div key={label} className="bg-surface border border-line rounded p-3">
+                      <p className="text-xs text-muted mb-1">{label}</p>
+                      <p className={`text-sm text-body ${mono ? 'font-mono break-all' : ''}`}>{value}</p>
                     </div>
                   ))}
                 </div>
 
                 {requestedPaths.length > 0 && (
-                  <div className="bg-gray-900 border border-gray-800 rounded p-4">
-                    <p className="text-xs text-gray-500 mb-2">Requested paths</p>
-                    <div className="font-mono text-xs text-gray-300 space-y-1">
+                  <div className="bg-surface border border-line rounded p-4">
+                    <p className="text-xs text-muted mb-2">Requested paths</p>
+                    <div className="font-mono text-xs text-body space-y-1">
                       {requestedPaths.map(p => <div key={p}>{p}</div>)}
                     </div>
                   </div>
                 )}
 
                 {detail.status === 'failed' && detail.errorMessage && (
-                  <div className="bg-red-500/10 border border-red-500/30 rounded p-4">
-                    <p className="text-xs font-semibold text-red-400 mb-1">Error</p>
-                    <p className="text-sm text-red-300 font-mono">{detail.errorMessage}</p>
+                  <div className="bg-err/10 border border-err/30 rounded p-4">
+                    <p className="text-xs font-semibold text-err mb-1">Error</p>
+                    <p className="text-sm text-err font-mono">{detail.errorMessage}</p>
                   </div>
                 )}
 
                 <div>
-                  <p className="text-sm font-medium text-gray-400 mb-2">Log output</p>
-                  <div className="bg-gray-950 rounded border border-gray-700 p-3 h-64 overflow-y-auto font-mono text-xs text-gray-300">
+                  <p className="text-sm font-medium text-muted mb-2">Log output</p>
+                  <div className="bg-base rounded border border-line p-3 h-64 overflow-y-auto font-mono text-xs text-body">
                     {detail.logOutput
                       ? detail.logOutput.split('\n').filter(Boolean).map((line, i) => (
-                          <div key={i} className={line.startsWith('[error]') ? 'text-red-400' : ''}>{line}</div>
+                          <div key={i} className={line.startsWith('[error]') ? 'text-err' : ''}>{line}</div>
                         ))
-                      : <span className="text-gray-600">No log output yet.</span>}
+                      : <span className="text-faint">No log output yet.</span>}
                   </div>
                 </div>
               </div>
             ) : (
-              <div className="flex items-center justify-center h-full text-gray-600">
+              <div className="flex items-center justify-center h-full text-faint">
                 Select a restore job to view details
               </div>
             )}
           </div>
         </div>
       )}
-    </div>
+      </div>
+    </Shell>
   )
 }
