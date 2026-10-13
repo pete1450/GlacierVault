@@ -2,7 +2,7 @@ name: Coverage Badge
 
 on:
   push:
-    branches: [main, ui/glacier-refresh]
+    branches: [main]
     paths:
       - 'api/**'
 
