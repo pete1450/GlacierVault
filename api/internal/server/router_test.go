@@ -14,12 +14,12 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/go-chi/chi/v5"
-	appCrypto "github.com/glaciervault/api/internal/crypto"
 	"github.com/glaciervault/api/internal/cloudfront"
+	appCrypto "github.com/glaciervault/api/internal/crypto"
 	"github.com/glaciervault/api/internal/notify"
 	"github.com/glaciervault/api/internal/restore"
 	"github.com/glaciervault/api/internal/scheduler"
+	"github.com/go-chi/chi/v5"
 	"golang.org/x/crypto/bcrypt"
 )
 
