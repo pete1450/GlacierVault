@@ -1,6 +1,6 @@
 'use client'
 import { useEffect, useState } from 'react'
-import Nav from '@/components/Nav'
+import Shell from '@/components/Shell'
 import {
   listBackups, createBackup, updateBackup, deleteBackup, runBackupNow,
   type BackupDef, type CreateBackupInput, type UpdateBackupInput,
@@ -163,42 +163,41 @@ export default function BackupsPage() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-950 text-white">
-      <Nav />
+    <Shell>
 
-      <main className="max-w-4xl mx-auto px-6 py-8 space-y-6">
+      <div className="space-y-6">
         <div className="flex items-center justify-between">
           <h1 className="text-2xl font-bold">Backup Sources</h1>
           <button
             onClick={() => openForm()}
-            className="px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded-lg text-sm font-medium transition-colors"
+            className="px-4 py-2 bg-accent hover:bg-accent-deep rounded-lg text-sm font-medium transition-colors"
           >
             + New Backup
           </button>
         </div>
 
         {runMsg && (
-          <div className="bg-green-900/30 border border-green-700 text-green-300 text-sm px-4 py-3 rounded-lg">
+          <div className="bg-ok/10 border border-ok/40 text-ok text-sm px-4 py-3 rounded-lg">
             {runMsg}
           </div>
         )}
 
         {deleteError && (
-          <div className="bg-red-900/30 border border-red-700 text-red-300 text-sm px-4 py-3 rounded-lg">
+          <div className="bg-err/10 border border-err/40 text-err text-sm px-4 py-3 rounded-lg">
             {deleteError}
           </div>
         )}
 
         {/* Backup list */}
         {loading ? (
-          <div className="text-gray-500 text-sm">Loading…</div>
+          <div className="text-muted text-sm">Loading…</div>
         ) : backups.length === 0 ? (
-          <div className="bg-gray-900 rounded-xl p-12 text-center">
-            <p className="text-gray-400 text-lg mb-2">No backups configured yet</p>
-            <p className="text-gray-600 text-sm mb-6">Add a backup source to get started.</p>
+          <div className="bg-surface rounded-xl p-12 text-center">
+            <p className="text-muted text-lg mb-2">No backups configured yet</p>
+            <p className="text-faint text-sm mb-6">Add a backup source to get started.</p>
             <button
               onClick={() => openForm()}
-              className="px-5 py-2 bg-blue-600 hover:bg-blue-700 rounded-lg font-medium transition-colors"
+              className="px-5 py-2 bg-accent hover:bg-accent-deep rounded-lg font-medium transition-colors"
             >
               + New Backup
             </button>
@@ -220,15 +219,15 @@ export default function BackupsPage() {
             ))}
           </div>
         )}
-      </main>
+      </div>
 
       {/* Create form modal */}
       {showForm && (
         <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
-          <div className="bg-gray-900 rounded-xl w-full max-w-lg max-h-[90vh] overflow-y-auto">
-            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-800">
+          <div className="bg-surface rounded-xl w-full max-w-lg max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-line">
               <h2 className="font-semibold text-lg">{editingId === null ? 'New Backup Source' : 'Edit Backup Source'}</h2>
-              <button onClick={() => setShowForm(false)} className="text-gray-400 hover:text-white text-xl leading-none">×</button>
+              <button onClick={() => setShowForm(false)} className="text-muted hover:text-ink text-xl leading-none">×</button>
             </div>
 
             <form onSubmit={handleSubmit} className="px-6 py-5 space-y-5">
@@ -248,9 +247,9 @@ export default function BackupsPage() {
               <Field label="Source Paths" required hint="Paths inside the container (mount host dirs via docker-compose volumes)">
                 <div className="space-y-2">
                   {form.sourcePaths.map(p => (
-                    <div key={p} className="flex items-center gap-2 bg-gray-800 px-3 py-1.5 rounded-lg text-sm font-mono">
-                      <span className="flex-1 text-gray-200">{p}</span>
-                      <button type="button" onClick={() => removePath(p)} className="text-gray-500 hover:text-red-400">×</button>
+                    <div key={p} className="flex items-center gap-2 bg-raised px-3 py-1.5 rounded-lg text-sm font-mono">
+                      <span className="flex-1 text-body">{p}</span>
+                      <button type="button" onClick={() => removePath(p)} className="text-muted hover:text-err">×</button>
                     </div>
                   ))}
                   <div className="flex gap-2">
@@ -265,7 +264,7 @@ export default function BackupsPage() {
                     <button
                       type="button"
                       onClick={addPath}
-                      className="px-3 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg text-sm transition-colors"
+                      className="px-3 py-2 bg-raised hover:bg-emboss rounded-lg text-sm transition-colors"
                     >
                       Add
                     </button>
@@ -284,8 +283,8 @@ export default function BackupsPage() {
                         onClick={() => handleSchedulePreset(s.value)}
                         className={`px-3 py-2 rounded-lg text-sm text-left transition-colors border ${
                           form.schedulePreset === s.value
-                            ? 'bg-blue-600/20 border-blue-500 text-blue-300'
-                            : 'bg-gray-800 border-gray-700 text-gray-300 hover:border-gray-500'
+                            ? 'bg-accent/20 border-accent text-accent-strong'
+                            : 'bg-raised border-line text-body hover:border-faint'
                         }`}
                       >
                         {s.label}
@@ -330,20 +329,20 @@ export default function BackupsPage() {
                 </Field>
               )}
 
-              {error && <p className="text-red-400 text-sm">{error}</p>}
+              {error && <p className="text-err text-sm">{error}</p>}
 
               <div className="flex gap-3 pt-1">
                 <button
                   type="submit"
                   disabled={saving}
-                  className="flex-1 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 rounded-lg font-medium transition-colors"
+                  className="flex-1 py-2 bg-accent hover:bg-accent-deep disabled:opacity-50 rounded-lg font-medium transition-colors"
                 >
                   {saving ? 'Saving…' : editingId === null ? 'Create Backup' : 'Save Changes'}
                 </button>
                 <button
                   type="button"
                   onClick={() => setShowForm(false)}
-                  className="px-4 py-2 bg-gray-800 hover:bg-gray-700 rounded-lg text-sm transition-colors"
+                  className="px-4 py-2 bg-raised hover:bg-raised rounded-lg text-sm transition-colors"
                 >
                   Cancel
                 </button>
@@ -352,7 +351,7 @@ export default function BackupsPage() {
           </div>
         </div>
       )}
-    </div>
+    </Shell>
   )
 }
 
@@ -373,18 +372,18 @@ function BackupCard({
   })()
 
   return (
-    <div className="bg-gray-900 rounded-xl p-5 space-y-3">
+    <div className="bg-surface rounded-xl p-5 space-y-3">
       <div className="flex items-start justify-between gap-4">
         <div className="space-y-1 min-w-0">
           <div className="flex items-center gap-2">
             <span className="font-semibold text-lg">{backup.name}</span>
             <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${
-              backup.enabled ? 'bg-green-500/20 text-green-300' : 'bg-gray-700 text-gray-400'
+              backup.enabled ? 'bg-ok/15 text-ok' : 'bg-raised text-muted'
             }`}>
               {backup.enabled ? 'enabled' : 'disabled'}
             </span>
           </div>
-          <div className="flex flex-wrap gap-x-4 gap-y-1 text-sm text-gray-400">
+          <div className="flex flex-wrap gap-x-4 gap-y-1 text-sm text-muted">
             <span>⏱ {backup.schedule}{backup.scheduleTimezone ? ` (${backup.scheduleTimezone})` : ''}</span>
             <span>📦 compression {backup.compressionLevel}</span>
           </div>
@@ -395,25 +394,25 @@ function BackupCard({
           <button
             onClick={onRunNow}
             disabled={running}
-            className="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 disabled:opacity-50 rounded-lg text-sm transition-colors"
+            className="px-3 py-1.5 bg-raised hover:bg-emboss disabled:opacity-50 rounded-lg text-sm transition-colors"
           >
             {running ? 'Running…' : '▶ Run now'}
           </button>
           <button
             onClick={onToggle}
-            className="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 rounded-lg text-sm transition-colors"
+            className="px-3 py-1.5 bg-raised hover:bg-emboss rounded-lg text-sm transition-colors"
           >
             {backup.enabled ? 'Disable' : 'Enable'}
           </button>
           <button
             onClick={onEdit}
-            className="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 rounded-lg text-sm transition-colors"
+            className="px-3 py-1.5 bg-raised hover:bg-emboss rounded-lg text-sm transition-colors"
           >
             Edit
           </button>
           <button
             onClick={onDeleteClick}
-            className="px-3 py-1.5 bg-gray-700 hover:bg-red-900 rounded-lg text-sm transition-colors"
+            className="px-3 py-1.5 bg-raised hover:bg-err rounded-lg text-sm transition-colors"
           >
             Delete
           </button>
@@ -423,7 +422,7 @@ function BackupCard({
       {/* Source paths */}
       <div className="flex flex-wrap gap-2">
         {paths.map(p => (
-          <span key={p} className="bg-gray-800 text-gray-300 text-xs font-mono px-2 py-1 rounded">
+          <span key={p} className="bg-raised text-body text-xs font-mono px-2 py-1 rounded">
             {p}
           </span>
         ))}
@@ -431,17 +430,17 @@ function BackupCard({
 
       {/* Delete confirmation */}
       {deleteConfirm && (
-        <div className="flex items-center gap-3 bg-red-950/50 border border-red-800 rounded-lg px-4 py-3 text-sm">
-          <span className="text-red-300 flex-1">Delete <strong>{backup.name}</strong>? This cannot be undone.</span>
+        <div className="flex items-center gap-3 bg-err/10 border border-err/40 rounded-lg px-4 py-3 text-sm">
+          <span className="text-err flex-1">Delete <strong>{backup.name}</strong>? This cannot be undone.</span>
           <button
             onClick={onDeleteConfirm}
-            className="px-3 py-1 bg-red-700 hover:bg-red-600 rounded text-white text-xs font-medium transition-colors"
+            className="px-3 py-1 bg-err rounded text-white text-xs font-medium transition-colors"
           >
             Confirm Delete
           </button>
           <button
             onClick={onDeleteClick}
-            className="px-3 py-1 bg-gray-700 hover:bg-gray-600 rounded text-xs transition-colors"
+            className="px-3 py-1 bg-raised hover:bg-emboss rounded text-xs transition-colors"
           >
             Cancel
           </button>
@@ -456,14 +455,14 @@ function Field({ label, required, hint, children }: {
 }) {
   return (
     <div className="space-y-1.5">
-      <label className="block text-sm font-medium text-gray-300">
+      <label className="block text-sm font-medium text-body">
         {label}
-        {required && <span className="text-red-400 ml-0.5">*</span>}
+        {required && <span className="text-err ml-0.5">*</span>}
       </label>
-      {hint && <p className="text-xs text-gray-500">{hint}</p>}
+      {hint && <p className="text-xs text-muted">{hint}</p>}
       {children}
     </div>
   )
 }
 
-const inputCls = 'w-full px-3 py-2 bg-gray-800 text-white rounded-lg border border-gray-700 focus:outline-none focus:border-blue-500 text-sm'
+const inputCls = 'w-full px-3 py-2 bg-raised text-ink rounded-lg border border-line focus:outline-none focus:border-accent text-sm'

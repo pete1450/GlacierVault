@@ -1,14 +1,14 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
-import Nav from '@/components/Nav'
+import Shell from '@/components/Shell'
 import { listJobs, getJob, cancelJob, type Job } from '@/lib/api'
 
 const STATUS_COLORS: Record<string, string> = {
-  running: 'bg-blue-500/20 text-blue-300 border-blue-500/30',
-  completed: 'bg-green-500/20 text-green-300 border-green-500/30',
-  failed: 'bg-red-500/20 text-red-300 border-red-500/30',
-  cancelled: 'bg-gray-500/20 text-gray-300 border-gray-500/30',
+  running: 'bg-accent/20 text-accent-strong border-accent/30',
+  completed: 'bg-ok/15 text-ok border-ok/30',
+  failed: 'bg-err/20 text-err border-err/30',
+  cancelled: 'bg-raised text-muted border-line',
 }
 
 function formatBytes(bytes: number) {
@@ -53,12 +53,12 @@ function LogStream({ jobId, initialLog }: { jobId: number; initialLog: string })
   }, [lines])
 
   return (
-    <div className="bg-gray-950 rounded border border-gray-700 p-3 h-64 overflow-y-auto font-mono text-xs text-gray-300">
+    <div className="bg-base rounded border border-line p-3 h-64 overflow-y-auto font-mono text-xs text-body">
       {lines.length === 0 ? (
-        <span className="text-gray-600">No log output yet…</span>
+        <span className="text-faint">No log output yet…</span>
       ) : (
         lines.map((line, i) => (
-          <div key={i} className={line.startsWith('[error]') ? 'text-red-400' : line.startsWith('[warn]') ? 'text-yellow-400' : ''}>
+          <div key={i} className={line.startsWith('[error]') ? 'text-err' : line.startsWith('[warn]') ? 'text-warn' : ''}>
             {line}
           </div>
         ))
@@ -72,26 +72,26 @@ function JobRow({ job, selected, onSelect }: { job: Job; selected: boolean; onSe
   return (
     <button
       onClick={onSelect}
-      className={`w-full text-left px-4 py-3 border-b border-gray-800 hover:bg-gray-800/50 transition-colors ${selected ? 'bg-gray-800/70' : ''}`}
+      className={`w-full text-left px-4 py-3 border-b border-line hover:bg-raised/50 transition-colors ${selected ? 'bg-raised/70' : ''}`}
     >
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-3 min-w-0">
-          <span className="text-gray-400 text-xs font-mono w-8 shrink-0">#{job.id}</span>
-          <span className={`text-xs px-2 py-0.5 rounded border font-medium ${STATUS_COLORS[job.status] ?? 'bg-gray-700 text-gray-300 border-gray-600'}`}>
+          <span className="text-muted text-xs font-mono w-8 shrink-0">#{job.id}</span>
+          <span className={`text-xs px-2 py-0.5 rounded border font-medium ${STATUS_COLORS[job.status] ?? 'bg-raised text-body border-line'}`}>
             {job.status}
           </span>
-          <span className="text-sm text-gray-300 truncate">
+          <span className="text-sm text-body truncate">
             Backup job {job.backupDefId ? `(def #${job.backupDefId})` : '(setup)'}
           </span>
         </div>
-        <div className="flex items-center gap-4 shrink-0 text-xs text-gray-500">
+        <div className="flex items-center gap-4 shrink-0 text-xs text-muted">
           {job.bytesTransferred > 0 && <span>{formatBytes(job.bytesTransferred)}</span>}
           <span>{formatDuration(job.startedAt, job.completedAt)}</span>
           <span>{new Date(job.startedAt).toLocaleString()}</span>
         </div>
       </div>
       {job.status === 'failed' && job.errorMessage && (
-        <p className="mt-1 ml-11 text-xs text-red-400 truncate">{job.errorMessage}</p>
+        <p className="mt-1 ml-11 text-xs text-err truncate">{job.errorMessage}</p>
       )}
     </button>
   )
@@ -160,18 +160,18 @@ export default function JobsPage() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-950 text-white">
-      <Nav />
+    <Shell>
+      <div className="space-y-6">
       {/* Header */}
-      <div className="border-b border-gray-800 px-6 py-4">
+      <div className="border-b border-line px-6 py-4">
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-xl font-semibold">Jobs</h1>
-            <p className="text-sm text-gray-400 mt-0.5">Backup job history and live logs</p>
+            <p className="text-sm text-muted mt-0.5">Backup job history and live logs</p>
           </div>
           {runningCount > 0 && (
-            <span className="flex items-center gap-2 text-sm text-blue-300 bg-blue-500/10 border border-blue-500/20 px-3 py-1.5 rounded-full">
-              <span className="h-2 w-2 rounded-full bg-blue-400 animate-pulse" />
+            <span className="flex items-center gap-2 text-sm text-accent-strong bg-accent/10 border border-accent/20 px-3 py-1.5 rounded-full">
+              <span className="h-2 w-2 rounded-full bg-accent-strong animate-pulse" />
               {runningCount} running
             </span>
           )}
@@ -179,18 +179,18 @@ export default function JobsPage() {
       </div>
 
       {loading ? (
-        <div className="flex items-center justify-center h-64 text-gray-500">Loading…</div>
+        <div className="flex items-center justify-center h-64 text-muted">Loading…</div>
       ) : error ? (
-        <div className="m-6 bg-red-500/10 border border-red-500/30 rounded p-4 text-red-300">{error}</div>
+        <div className="m-6 bg-err/10 border border-err/30 rounded p-4 text-err">{error}</div>
       ) : jobs.length === 0 ? (
-        <div className="flex flex-col items-center justify-center h-64 text-gray-500 gap-2">
+        <div className="flex flex-col items-center justify-center h-64 text-muted gap-2">
           <p>No jobs yet.</p>
           <p className="text-sm">Run a backup from the Backups page to get started.</p>
         </div>
       ) : (
         <div className="flex h-[calc(100vh-73px)]">
           {/* Job list */}
-          <div className="w-96 shrink-0 border-r border-gray-800 overflow-y-auto">
+          <div className="w-96 shrink-0 border-r border-line overflow-y-auto">
             {jobs.map((job) => (
               <JobRow
                 key={job.id}
@@ -214,7 +214,7 @@ export default function JobsPage() {
                   {selectedJob.status === 'running' && (
                     <button
                       onClick={handleCancel}
-                      className="text-sm px-3 py-1 rounded border border-red-500/40 text-red-300 hover:bg-red-500/10 transition-colors"
+                      className="text-sm px-3 py-1 rounded border border-err/40 text-err hover:bg-err/10 transition-colors"
                     >
                       Cancel
                     </button>
@@ -229,48 +229,49 @@ export default function JobsPage() {
                     { label: 'Duration', value: formatDuration(selectedJob.startedAt, selectedJob.completedAt) },
                     { label: 'Transferred', value: formatBytes(selectedJob.bytesTransferred) },
                   ].map(({ label, value }) => (
-                    <div key={label} className="bg-gray-900 border border-gray-800 rounded p-3">
-                      <p className="text-xs text-gray-500 mb-1">{label}</p>
-                      <p className="text-sm font-medium text-gray-200">{value}</p>
+                    <div key={label} className="bg-surface border border-line rounded p-3">
+                      <p className="text-xs text-muted mb-1">{label}</p>
+                      <p className="text-sm font-medium text-body">{value}</p>
                     </div>
                   ))}
                 </div>
 
                 {/* Error */}
                 {(selectedJob.status === 'failed' || selectedJob.status === 'cancelled') && selectedJob.errorMessage && (
-                  <div className="bg-red-500/10 border border-red-500/30 rounded p-4">
-                    <p className="text-xs font-semibold text-red-400 mb-1">Error</p>
-                    <p className="text-sm text-red-300 font-mono">{selectedJob.errorMessage}</p>
+                  <div className="bg-err/10 border border-err/30 rounded p-4">
+                    <p className="text-xs font-semibold text-err mb-1">Error</p>
+                    <p className="text-sm text-err font-mono">{selectedJob.errorMessage}</p>
                   </div>
                 )}
 
                 {/* Log output */}
                 <div>
-                  <p className="text-sm font-medium text-gray-400 mb-2">Log output</p>
+                  <p className="text-sm font-medium text-muted mb-2">Log output</p>
                   {selectedJob.status === 'running' ? (
                     <LogStream jobId={selectedJob.id} initialLog={selectedJob.logOutput} />
                   ) : (
-                    <div className="bg-gray-950 rounded border border-gray-700 p-3 h-64 overflow-y-auto font-mono text-xs text-gray-300">
+                    <div className="bg-base rounded border border-line p-3 h-64 overflow-y-auto font-mono text-xs text-body">
                       {selectedJob.logOutput
                         ? selectedJob.logOutput.split('\n').filter(Boolean).map((line, i) => (
-                            <div key={i} className={line.startsWith('[error]') ? 'text-red-400' : line.startsWith('[warn]') ? 'text-yellow-400' : ''}>
+                            <div key={i} className={line.startsWith('[error]') ? 'text-err' : line.startsWith('[warn]') ? 'text-warn' : ''}>
                               {line}
                             </div>
                           ))
-                        : <span className="text-gray-600">No log output.</span>
+                        : <span className="text-faint">No log output.</span>
                       }
                     </div>
                   )}
                 </div>
               </div>
             ) : (
-              <div className="flex items-center justify-center h-full text-gray-600">
+              <div className="flex items-center justify-center h-full text-faint">
                 Select a job to view details
               </div>
             )}
           </div>
         </div>
       )}
-    </div>
+      </div>
+    </Shell>
   )
 }
