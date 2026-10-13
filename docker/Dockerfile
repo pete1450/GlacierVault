@@ -9,7 +9,7 @@ RUN go mod tidy && go mod download
 RUN CGO_ENABLED=1 GOOS=linux go build -o /out/glaciervault-api ./cmd/server
 
 # ── Stage 2: Build Next.js frontend ─────────────────────────────────────────
-FROM node:24-trixie-slim AS frontend-builder
+FROM node:26-trixie-slim AS frontend-builder
 
 WORKDIR /build/frontend
 COPY frontend/package*.json ./
