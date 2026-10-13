@@ -1,5 +1,11 @@
 # GlacierVault
 
+[![CI](https://github.com/pete1450/GlacierVault/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/pete1450/GlacierVault/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://github.com/pete1450/GlacierVault/blob/main/LICENSE)
+[![Latest tag](https://img.shields.io/github/v/tag/pete1450/GlacierVault?label=version)](https://github.com/pete1450/GlacierVault/tags)
+[![Dependabot](https://img.shields.io/badge/dependabot-enabled-025E8C?logo=dependabot&logoColor=white)](https://github.com/pete1450/GlacierVault/blob/main/.github/dependabot.yml)
+[![Last commit](https://img.shields.io/github/last-commit/pete1450/GlacierVault)](https://github.com/pete1450/GlacierVault/commits/main)
+
 A self-hosted backup appliance that makes cheap AWS Glacier Deep Archive as simple as possible: you bring AWS credentials, it handles the rest. One Docker container with a web UI — it deploys the AWS infrastructure with CDK, schedules encrypted [Rustic](https://github.com/rustic-rs/rustic) backups into Deep Archive, and walks restores through Glacier retrieval (with a private CloudFront distribution for free-egress downloads and Apprise notifications when jobs finish).
 
 ## Built on
