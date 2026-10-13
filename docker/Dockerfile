@@ -1,5 +1,5 @@
 # ── Stage 1: Build Go API ───────────────────────────────────────────────────
-FROM golang:1.25-trixie AS go-builder
+FROM golang:1.26-trixie AS go-builder
 
 WORKDIR /build/api
 COPY api/go.mod ./
@@ -39,7 +39,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Apprise: notification dispatcher (Discord, Slack, Telegram, email, ntfy,
 # webhooks, ...). The Go API shells out to the `apprise` CLI; destinations
 # are user-configured URLs in Settings.
-RUN pip3 install --break-system-packages --no-cache-dir apprise \
+# Pinned to the v1 line: apprise 2.x is a breaking release (notify() result
+# object, new CLI exit codes, reworked body-format handling) and its
+# maintainer urges embedders to pin until adapted. Revisit v2 deliberately.
+RUN pip3 install --break-system-packages --no-cache-dir "apprise>=1.0.0,<2.0.0" \
     && apprise --version
 
 # AWS CLI v2.
