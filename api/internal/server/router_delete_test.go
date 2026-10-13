@@ -16,11 +16,17 @@ import (
 
 // openMigratedDB creates a temp sqlite DB with foreign keys on and applies
 // the 001 initial schema migration.
+//
+// Note: WAL mode is intentionally NOT used here. In WAL mode SQLite creates
+// -wal/-shm sidecar files whose cleanup races with Go's t.TempDir() removal,
+// causing flaky "directory not empty" failures in CI. The tests exercise
+// foreign-key and handler logic, not journal modes, so the default
+// rollback-journal mode is sufficient and deterministic.
 func openMigratedDB(t *testing.T) *sql.DB {
 	t.Helper()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.db")
-	db, err := sql.Open("sqlite3", path+"?_foreign_keys=on&_journal_mode=WAL")
+	db, err := sql.Open("sqlite3", path+"?_foreign_keys=on")
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
