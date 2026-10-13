@@ -4,7 +4,8 @@ import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import Shell from '@/components/Shell'
 import IcebergMeter from '@/components/IcebergMeter'
-import CostDialog, { formatBytes, formatUSD } from '@/components/CostDialog'
+import CostDialog from '@/components/CostDialog'
+import { formatBytes, formatUSD } from '@/lib/restoreCost'
 import { listJobs, listBackups, listSnapshots, getSetupStatus, getStorage, type Job, type BackupDef, type Snapshot, type StorageInfo } from '@/lib/api'
 
 const DEEP_ARCHIVE_GB_MONTH = 0.00099

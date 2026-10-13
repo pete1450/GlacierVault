@@ -1,95 +1,18 @@
 'use client'
 import { useEffect } from 'react'
-
-export const PRICES_AS_OF = 'September 2026'
-export const PRICES_REGION = 'us-east-1'
-
-// Prices from docs/costs.md (AWS S3 pricing page, us-east-1).
-const DEEP_ARCHIVE_GB_MONTH = 0.00099
-const STANDARD_GB_MONTH = 0.023
-const BULK_RETRIEVAL_GB = 0.0025
-const BULK_RETRIEVAL_PER_1K_REQ = 0.025
-const BATCH_JOB = 0.25
-const BATCH_PER_M_OBJECTS = 1.0
-const CF_FREE_TB_MONTH = 1
-const CF_OVERAGE_GB = 0.085
-const PACK_BYTES = 512 * 1024 * 1024
-const WARMUP_BATCH_SIZE = 1000
-const DOWNLOAD_GB_PER_DAY = 1080
-
-export function formatUSD(n: number): string {
-  if (n < 0.01 && n > 0) return '<$0.01'
-  return `$${n.toFixed(2)}`
-}
-
-export function formatBytes(bytes: number): string {
-  if (!bytes || bytes <= 0) return '0 B'
-  const units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB']
-  const i = Math.min(units.length - 1, Math.floor(Math.log(bytes) / Math.log(1024)))
-  return `${(bytes / Math.pow(1024, i)).toFixed(1)} ${units[i]}`
-}
-
-interface LineItem {
-  label: string
-  detail: string
-  cost: number
-}
-
-interface Scenario {
-  title: string
-  subtitle: string
-  packs: number
-  bytes: number
-  batches: number
-}
-
-function avgExpiryDays(batches: number, totalGB: number): number {
-  if (batches <= 1) return 1
-  const dl = Math.ceil(totalGB / DOWNLOAD_GB_PER_DAY)
-  let sum = 0
-  for (let k = 1; k <= batches; k++) sum += 2 * (batches - k) + dl + 1
-  return sum / batches
-}
-
-function scenarioItems(s: Scenario): LineItem[] {
-  const gb = s.bytes / 1024 ** 3
-  const items: LineItem[] = [
-    {
-      label: 'S3 Batch restore jobs',
-      detail: `${s.batches} × $${BATCH_JOB.toFixed(2)}`,
-      cost: s.batches * BATCH_JOB,
-    },
-    {
-      label: 'Batch per-object charge',
-      detail: `${s.packs.toLocaleString()} objects × $${BATCH_PER_M_OBJECTS.toFixed(2)}/M`,
-      cost: (s.packs / 1e6) * BATCH_PER_M_OBJECTS,
-    },
-    {
-      label: 'Bulk retrieval — data',
-      detail: `${gb.toFixed(1)} GB × $${BULK_RETRIEVAL_GB}/GB`,
-      cost: gb * BULK_RETRIEVAL_GB,
-    },
-    {
-      label: 'Bulk retrieval — requests',
-      detail: `${s.packs.toLocaleString()} × $${BULK_RETRIEVAL_PER_1K_REQ}/1k`,
-      cost: (s.packs / 1000) * BULK_RETRIEVAL_PER_1K_REQ,
-    },
-  ]
-  const avgDays = avgExpiryDays(s.batches, gb)
-  items.push({
-    label: 'Thawed copies (S3 Standard)',
-    detail: `${gb.toFixed(1)} GB × $${STANDARD_GB_MONTH}/GB-mo × ${avgDays.toFixed(1)}d avg`,
-    cost: gb * STANDARD_GB_MONTH * (avgDays / 30),
-  })
-  const freeGB = CF_FREE_TB_MONTH * 1024
-  const overGB = Math.max(0, gb - freeGB)
-  items.push({
-    label: 'Egress via CloudFront',
-    detail: overGB > 0 ? `${overGB.toFixed(0)} GB over free tier × $${CF_OVERAGE_GB}/GB` : 'within 1 TB/mo free tier',
-    cost: overGB * CF_OVERAGE_GB,
-  })
-  return items
-}
+import {
+  PRICES_AS_OF,
+  PRICES_REGION,
+  DEEP_ARCHIVE_GB_MONTH,
+  STANDARD_GB_MONTH,
+  PACK_BYTES,
+  formatUSD,
+  formatBytes,
+  scenarioForBytes,
+  restoreCostItems,
+  restoreCostTotal,
+  type RestoreScenario,
+} from '@/lib/restoreCost'
 
 export default function CostDialog({
   packBytes,
@@ -112,28 +35,19 @@ export default function CostDialog({
   const hotMo = hotGB * STANDARD_GB_MONTH
 
   const packCount = Math.max(1, Math.ceil(packBytes / PACK_BYTES))
-  const scenarios: Scenario[] = [
-    {
-      title: 'One small file',
-      subtitle: `warms its whole ${formatBytes(PACK_BYTES)} pack`,
-      packs: 1,
-      bytes: Math.min(PACK_BYTES, packBytes || PACK_BYTES),
-      batches: 1,
-    },
-    {
-      title: 'Half the repository',
-      subtitle: `${Math.ceil(packCount / 2).toLocaleString()} of ${packCount.toLocaleString()} packs`,
-      packs: Math.ceil(packCount / 2),
-      bytes: packBytes / 2,
-      batches: Math.max(1, Math.ceil(Math.ceil(packCount / 2) / WARMUP_BATCH_SIZE)),
-    },
-    {
-      title: 'Whole repository',
-      subtitle: `${packCount.toLocaleString()} packs`,
-      packs: packCount,
-      bytes: packBytes,
-      batches: Math.max(1, Math.ceil(packCount / WARMUP_BATCH_SIZE)),
-    },
+  const halfPacks = Math.ceil(packCount / 2)
+  const scenarios: RestoreScenario[] = [
+    scenarioForBytes(
+      'One small file',
+      `warms its whole ${formatBytes(PACK_BYTES)} pack`,
+      Math.min(PACK_BYTES, packBytes || PACK_BYTES),
+    ),
+    scenarioForBytes(
+      'Half the repository',
+      `${halfPacks.toLocaleString()} of ${packCount.toLocaleString()} packs`,
+      packBytes / 2,
+    ),
+    scenarioForBytes('Whole repository', `${packCount.toLocaleString()} packs`, packBytes),
   ]
 
   return (
@@ -175,8 +89,8 @@ export default function CostDialog({
 
           {/* Restore scenarios */}
           {scenarios.map(sc => {
-            const items = scenarioItems(sc)
-            const total = items.reduce((a, b) => a + b.cost, 0)
+            const items = restoreCostItems(sc)
+            const total = restoreCostTotal(sc)
             return (
               <section key={sc.title}>
                 <h3 className="text-sm font-bold uppercase tracking-wider text-faint mb-1">Restore · {sc.title}</h3>
