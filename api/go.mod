@@ -1,6 +1,8 @@
 module github.com/glaciervault/api
 
-go 1.24
+go 1.26
+
+toolchain go1.26.9
 
 require (
 	github.com/aws/aws-sdk-go-v2 v1.47.1
@@ -12,8 +14,8 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.113.4
 	github.com/aws/aws-sdk-go-v2/service/s3control v1.79.1
 	github.com/aws/aws-sdk-go-v2/service/sts v1.51.1
-	github.com/go-chi/chi/v5 v5.0.12
-	github.com/golang-jwt/jwt/v5 v5.2.1
+	github.com/go-chi/chi/v5 v5.4.0
+	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/golang-migrate/migrate/v4 v4.17.1
 	github.com/mattn/go-sqlite3 v1.14.22
 	github.com/robfig/cron/v3 v3.0.1

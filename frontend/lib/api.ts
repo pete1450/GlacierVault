@@ -1,5 +1,11 @@
 const BASE = '/api'
 
+// errMsg extracts a readable message from a caught error (catch bindings
+// are `unknown`; this keeps call sites free of `any`).
+export function errMsg(err: unknown): string {
+  return err instanceof Error ? err.message : String(err)
+}
+
 async function req<T>(method: string, path: string, body?: unknown): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
     method,
@@ -27,7 +33,7 @@ export const changePassword = (currentPassword: string, newPassword: string) =>
 
 // Setup
 export const validateCredentials = (accessKey: string, secretKey: string, region: string) =>
-  req('POST', '/setup/validate', { accessKey, secretKey, region })
+  req<{ identity: string; estimate: CostEstimate }>('POST', '/setup/validate', { accessKey, secretKey, region })
 export const deployInfrastructure = (accessKey: string, secretKey: string, region: string, stackName?: string, readonlySnapshots?: boolean) =>
   req<{ jobId: number }>('POST', '/setup/deploy', { accessKey, secretKey, region, stackName, readonlySnapshots })
 export const getSetupStatus = () => req<SetupStatus>('GET', '/setup/status')
@@ -35,7 +41,7 @@ export const getSetupStatus = () => req<SetupStatus>('GET', '/setup/status')
 // Backups
 export const listBackups = () => req<BackupDef[]>('GET', '/backups')
 export const createBackup = (data: CreateBackupInput) => req<{ id: number }>('POST', '/backups', data)
-export const updateBackup = (id: number, data: Partial<CreateBackupInput>) => req('PUT', `/backups/${id}`, data)
+export const updateBackup = (id: number, data: UpdateBackupInput) => req('PUT', `/backups/${id}`, data)
 export const deleteBackup = (id: number) => req('DELETE', `/backups/${id}`)
 export const runBackupNow = (id: number) => req<{ jobId: number }>('POST', `/backups/${id}/run`)
 
@@ -134,6 +140,10 @@ export const testNotification = (destinations: string[]) =>
   req<{ ok: boolean }>('POST', '/notifications/test', { destinations })
 
 // Types
+export interface CostEstimate {
+  s3Buckets: number; sqsQueues: number; iamUsers: number; iamRoles: number
+  cloudfrontDists: number; details: string
+}
 export interface SetupStatus {
   setupComplete: boolean
   region: string
@@ -141,7 +151,7 @@ export interface SetupStatus {
   coldBucket: string
   sqsUrl: string
   deployedAt: string | null
-  estimate: { s3Buckets: number; sqsQueues: number; iamUsers: number; iamRoles: number; cloudfrontDists: number; details: string }
+  estimate: CostEstimate
 }
 export interface BackupDef {
   id: number; name: string; sourcePaths: string; schedule: string
@@ -151,6 +161,12 @@ export interface BackupDef {
 export interface CreateBackupInput {
   name: string; sourcePaths: string[]; schedule: string
   compressionLevel?: number; password: string
+}
+// Fields the update endpoint accepts (mirrors the server's update body,
+// which additionally supports toggling `enabled`).
+export interface UpdateBackupInput {
+  name?: string; sourcePaths?: string[]; schedule?: string
+  compressionLevel?: number; password?: string; enabled?: boolean
 }
 export interface Job {
   id: number; backupDefId: number; startedAt: string; completedAt: string | null

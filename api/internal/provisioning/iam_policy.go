@@ -32,8 +32,8 @@ func SnapshotDeletePolicyDocument(coldBucket, hotBucket string) string {
 		"Version": "2012-10-17",
 		"Statement": []map[string]interface{}{
 			{
-				"Effect":   "Allow",
-				"Action":   []string{"s3:DeleteObject"},
+				"Effect": "Allow",
+				"Action": []string{"s3:DeleteObject"},
 				"Resource": []string{
 					fmt.Sprintf("arn:aws:s3:::%s/*", coldBucket),
 					fmt.Sprintf("arn:aws:s3:::%s/*", hotBucket),

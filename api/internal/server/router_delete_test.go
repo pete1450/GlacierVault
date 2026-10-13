@@ -9,9 +9,9 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/glaciervault/api/internal/scheduler"
 	"github.com/go-chi/chi/v5"
 	_ "github.com/mattn/go-sqlite3"
-	"github.com/glaciervault/api/internal/scheduler"
 )
 
 // openMigratedDB creates a temp sqlite DB with foreign keys on and applies
