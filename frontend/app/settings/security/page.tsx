@@ -6,6 +6,7 @@ import {
   logoutAll, type APIToken,
   errMsg,
 } from '@/lib/api'
+import QRCode from 'react-qr-code'
 
 export default function SecurityPage() {
   const [authType, setAuthType] = useState<string | null>(null)
@@ -167,10 +168,10 @@ export default function SecurityPage() {
                 <p className="text-sm text-body">
                   Scan this QR code with your authenticator app, then enter the 6-digit code below.
                 </p>
+                <div className="bg-white p-4 rounded-lg inline-block">
+                  <QRCode value={qrUrl} size={192} />
+                </div>
                 <p className="text-xs text-muted font-mono break-all">Secret: {qrSecret}</p>
-                <p className="text-xs text-muted break-all">
-                  Manual entry URL: <span className="font-mono">{qrUrl}</span>
-                </p>
                 <form onSubmit={handleVerifyTOTP} className="flex gap-2 max-w-xs">
                   <input
                     value={verifyCode}
