@@ -1,5 +1,5 @@
 'use client'
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { login, errMsg } from '@/lib/api'
 import { useRouter } from 'next/navigation'
 
@@ -7,7 +7,15 @@ export default function LoginPage() {
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
+  const [authType, setAuthType] = useState<string | null>(null)
   const router = useRouter()
+
+  useEffect(() => {
+    fetch('/api/auth/config')
+      .then(r => r.json())
+      .then(d => setAuthType(d.authType || 'password'))
+      .catch(() => setAuthType('password'))
+  }, [])
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
@@ -21,6 +29,39 @@ export default function LoginPage() {
     } finally {
       setLoading(false)
     }
+  }
+
+  function handleSSO() {
+    window.location.href = '/api/auth/oidc/login'
+  }
+
+  // Show SSO button when OIDC is configured.
+  if (authType === 'oidc') {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-base">
+        <div className="w-full max-w-sm bg-surface rounded-xl shadow-lg p-8">
+          <div className="flex items-center gap-3 mb-2">
+            <img src="/logo.png" alt="GlacierVault logo" width={40} height={40} className="rounded-lg" />
+            <h1 className="text-2xl font-bold text-ink">GlacierVault</h1>
+          </div>
+          <p className="text-muted text-sm mb-6">Self-hosted AWS Glacier backup</p>
+          <button
+            onClick={handleSSO}
+            className="w-full py-2 bg-accent hover:bg-accent-deep text-ink rounded-lg font-medium transition-colors"
+          >
+            Sign in with SSO
+          </button>
+          <p className="text-muted text-xs mt-4 text-center">
+            You&apos;ll be redirected to your identity provider.
+          </p>
+        </div>
+      </div>
+    )
+  }
+
+  // Default password login.
+  if (authType === null) {
+    return <div className="min-h-screen flex items-center justify-center bg-base text-muted">Loading…</div>
   }
 
   return (

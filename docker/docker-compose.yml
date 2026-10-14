@@ -24,8 +24,19 @@ services:
       #   - /srv/media:/mnt/media:ro
       #   - /var/lib/docker/volumes:/mnt/docker-volumes:ro
     environment:
+      # ── Authentication ──────────────────────────────────────────────────
+      # AUTH_TYPE: "password" (default) or "oidc" for SSO.
+      - AUTH_TYPE=${AUTH_TYPE:-password}
       # Set your initial login password here (or change it after first boot).
+      # Only used when AUTH_TYPE=password.
       - INITIAL_PASSWORD=changeme
+      # OIDC/SSO settings (only used when AUTH_TYPE=oidc).
+      # Example for Authentik: https://auth.example.com/application/o/glaciervault/
+      - OIDC_ISSUER=${OIDC_ISSUER:-}
+      - OIDC_CLIENT_ID=${OIDC_CLIENT_ID:-}
+      - OIDC_CLIENT_SECRET=${OIDC_CLIENT_SECRET:-}
+      - OIDC_REDIRECT_URL=${OIDC_REDIRECT_URL:-http://localhost:8080/api/auth/oidc/callback}
+      # ── End Authentication ──────────────────────────────────────────────
       # Timezone that backup schedules (cron expressions) evaluate in.
       # Use an IANA name, e.g. America/Chicago, Europe/Berlin.
       # Without this the container runs on UTC.

@@ -12,6 +12,7 @@ import (
 
 	"golang.org/x/crypto/bcrypt"
 
+	"github.com/glaciervault/api/internal/auth"
 	"github.com/glaciervault/api/internal/catalog"
 	"github.com/glaciervault/api/internal/cloudfront"
 	appCrypto "github.com/glaciervault/api/internal/crypto"
@@ -88,6 +89,27 @@ func main() {
 
 	jwtSecret := loadOrGenerateJWTSecret(configDir)
 
+	// OIDC configuration. AUTH_TYPE=oidc enables SSO; defaults to password.
+	authType := env("AUTH_TYPE", "password")
+	var oidcClient *auth.OIDCClient
+	if authType == "oidc" {
+		oidcCfg := auth.OIDCConfig{
+			Enabled:      true,
+			Issuer:       os.Getenv("OIDC_ISSUER"),
+			ClientID:     os.Getenv("OIDC_CLIENT_ID"),
+			ClientSecret: os.Getenv("OIDC_CLIENT_SECRET"),
+			RedirectURL:  env("OIDC_REDIRECT_URL", "http://localhost:8080/api/auth/oidc/callback"),
+		}
+		var err error
+		oidcClient, err = auth.NewOIDCClient(context.Background(), oidcCfg)
+		if err != nil {
+			log.Fatalf("oidc: %v", err)
+		}
+		log.Printf("Auth: OIDC enabled (issuer=%s)", oidcCfg.Issuer)
+	} else {
+		log.Printf("Auth: password enabled")
+	}
+
 	srv := &server.Server{
 		DB:         database,
 		Engine:     eng,
@@ -98,6 +120,8 @@ func main() {
 		Notify:     notifyMgr,
 		JWTSecret:  jwtSecret,
 		ConfigPath: configDir,
+		OIDC:       oidcClient,
+		AuthType:   authType,
 	}
 
 	log.Printf("GlacierVault listening on %s", listenAddr)

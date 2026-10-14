@@ -107,6 +107,7 @@ Notes:
 - `INITIAL_PASSWORD` sets the web UI login password. If you omit it, the
   server generates a random one and **prints it in the container log** on
   first boot — check `docker logs` and change it in Settings.
+- For SSO via your own identity provider, see [Authentication](auth.md).
 
 ```bash
 docker compose up -d

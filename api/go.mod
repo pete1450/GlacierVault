@@ -35,7 +35,10 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/sso v1.38.4 // indirect
 	github.com/aws/aws-sdk-go-v2/service/ssooidc v1.43.4 // indirect
 	github.com/aws/smithy-go v1.28.5 // indirect
+	github.com/coreos/go-oidc/v3 v3.21.0 // indirect
+	github.com/go-jose/go-jose/v4 v4.1.4 // indirect
 	github.com/hashicorp/errwrap v1.1.0 // indirect
 	github.com/hashicorp/go-multierror v1.1.1 // indirect
 	go.uber.org/atomic v1.7.0 // indirect
+	golang.org/x/oauth2 v0.37.0 // indirect
 )
