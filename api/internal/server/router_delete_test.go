@@ -38,6 +38,14 @@ func openMigratedDB(t *testing.T) *sql.DB {
 		"003_warmup_infra.up.sql",
 		"004_cloudfront_egress.up.sql",
 		"005_restore_batch_job_id.up.sql",
+		"006_notifications.up.sql",
+		"007_snapshot_delete_grant.up.sql",
+		"008_restore_snapshot_setnull.up.sql",
+		"009_drop_retention_label.up.sql",
+		"010_restore_warmup_tuning.up.sql",
+		"011_file_index_snapshot_path.up.sql",
+		"012_file_index_reindex_sizes.up.sql",
+		"013_auth_hardening.up.sql",
 	} {
 		schema, err := os.ReadFile("../db/migrations/" + mig)
 		if err != nil {

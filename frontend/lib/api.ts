@@ -194,3 +194,25 @@ export interface RestoreTuning {
 export const getRestoreTuning = () => req<RestoreTuning>('GET', '/restores/tuning')
 export const saveRestoreTuning = (cfg: RestoreTuning) =>
   req<{ ok: boolean }>('PUT', '/restores/tuning', cfg)
+
+// ── Security: TOTP 2FA ──────────────────────────────────────────────────
+export const getTOTPStatus = () => req<{ enabled: boolean }>('GET', '/auth/totp/status')
+export const setupTOTP = () => req<{ secret: string; url: string }>('POST', '/auth/totp/setup')
+export const verifyTOTPSetup = (code: string) =>
+  req<{ status: string; backupCodes: string[] }>('POST', '/auth/totp/verify-setup', { code })
+export const disableTOTP = (password: string) =>
+  req<{ status: string }>('POST', '/auth/totp/disable', { password })
+export const verifyTOTPLogin = (pendingToken: string, code: string) =>
+  req<{ status: string }>('POST', '/auth/totp/verify-login', { pendingToken, code })
+
+// ── Security: API tokens ────────────────────────────────────────────────
+export interface APIToken {
+  id: number; name: string; createdAt: string; lastUsedAt?: string; expiresAt?: string
+}
+export const listAPITokens = () => req<APIToken[]>('GET', '/auth/tokens')
+export const createAPIToken = (name: string, expiresIn?: string) =>
+  req<{ id: number; name: string; token: string }>('POST', '/auth/tokens', { name, expiresIn })
+export const revokeAPIToken = (id: number) => req<{ status: string }>('DELETE', `/auth/tokens/${id}`)
+
+// ── Security: sessions ──────────────────────────────────────────────────
+export const logoutAll = () => req<{ status: string }>('POST', '/auth/logout-all')

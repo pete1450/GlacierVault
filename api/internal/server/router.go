@@ -37,17 +37,19 @@ const jwtSecret = "" // set via Server.JWTSecret
 
 // Server holds all dependencies and the HTTP handler.
 type Server struct {
-	DB         *sql.DB
-	Engine     *engine.Engine
-	Catalog    *catalog.Catalog
-	Scheduler  *scheduler.Scheduler
-	RestoreMgr *restore.Manager
-	CFManager  *cloudfront.Manager
-	Notify     *notify.Manager
-	JWTSecret  []byte
-	ConfigPath string
-	OIDC       *auth.OIDCClient
-	AuthType   string // "password" (default) or "oidc"
+	DB           *sql.DB
+	Engine       *engine.Engine
+	Catalog      *catalog.Catalog
+	Scheduler    *scheduler.Scheduler
+	RestoreMgr   *restore.Manager
+	CFManager    *cloudfront.Manager
+	Notify       *notify.Manager
+	JWTSecret    []byte
+	ConfigPath   string
+	OIDC         *auth.OIDCClient
+	AuthType     string // "password" (default) or "oidc"
+	RateLimiter  *auth.RateLimiter
+	TokenManager *auth.TokenManager
 }
 
 func (s *Server) Router() http.Handler {
@@ -58,6 +60,7 @@ func (s *Server) Router() http.Handler {
 
 	// Public routes.
 	r.Post("/api/auth/login", s.handleLogin)
+	r.Post("/api/auth/totp/verify-login", s.handleTOTPVerifyLogin)
 	r.Get("/api/auth/oidc/login", s.handleOIDCLogin)
 	r.Get("/api/auth/oidc/callback", s.handleOIDCCallback)
 	r.Get("/api/auth/config", s.handleAuthConfig)
@@ -66,7 +69,17 @@ func (s *Server) Router() http.Handler {
 	r.Group(func(r chi.Router) {
 		r.Use(s.authMiddleware)
 		r.Post("/api/auth/logout", s.handleLogout)
+		r.Post("/api/auth/logout-all", s.handleLogoutAll)
 		r.Post("/api/auth/change-password", s.handleChangePassword)
+		// TOTP 2FA.
+		r.Get("/api/auth/totp/status", s.handleTOTPStatus)
+		r.Post("/api/auth/totp/setup", s.handleTOTPSetup)
+		r.Post("/api/auth/totp/verify-setup", s.handleTOTPVerifySetup)
+		r.Post("/api/auth/totp/disable", s.handleTOTPDisable)
+		// API tokens.
+		r.Get("/api/auth/tokens", s.handleListAPITokens)
+		r.Post("/api/auth/tokens", s.handleCreateAPIToken)
+		r.Delete("/api/auth/tokens/{id}", s.handleRevokeAPIToken)
 
 		// Setup wizard.
 		r.Post("/api/setup/validate", s.handleValidateCredentials)
@@ -135,6 +148,15 @@ func (s *Server) Router() http.Handler {
 // ── Auth ─────────────────────────────────────────────────────────────────────
 
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
+	// Check rate limiting.
+	if s.RateLimiter != nil {
+		if locked, remaining := s.RateLimiter.CheckRequest(r); locked {
+			writeError(w, http.StatusTooManyRequests,
+				fmt.Sprintf("too many failed attempts; try again in %v", remaining.Round(time.Second)))
+			return
+		}
+	}
+
 	var body struct {
 		Password string `json:"password"`
 	}
@@ -144,20 +166,46 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var hash string
-	row := s.DB.QueryRowContext(r.Context(), `SELECT password_hash FROM app_config WHERE id = 1`)
-	if err := row.Scan(&hash); err != nil {
+	var epoch int
+	row := s.DB.QueryRowContext(r.Context(), `SELECT password_hash, token_epoch FROM app_config WHERE id = 1`)
+	if err := row.Scan(&hash, &epoch); err != nil {
+		if s.RateLimiter != nil {
+			s.RateLimiter.RecordRequest(r, false)
+		}
 		writeError(w, http.StatusUnauthorized, "not configured")
 		return
 	}
 
 	if err := bcrypt.CompareHashAndPassword([]byte(hash), []byte(body.Password)); err != nil {
+		if s.RateLimiter != nil {
+			s.RateLimiter.RecordRequest(r, false)
+		}
 		writeError(w, http.StatusUnauthorized, "invalid password")
 		return
 	}
 
+	if s.RateLimiter != nil {
+		s.RateLimiter.RecordRequest(r, true)
+	}
+
+	// If TOTP is enabled, issue a pending token and require the second factor.
+	if s.totpEnabledForLogin() {
+		pending, err := s.issuePendingTOTPToken()
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "token error")
+			return
+		}
+		writeJSON(w, http.StatusAccepted, map[string]interface{}{
+			"status":       "totp_required",
+			"pendingToken": pending,
+		})
+		return
+	}
+
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
-		"sub": "admin",
-		"exp": time.Now().Add(8 * time.Hour).Unix(),
+		"sub":   "admin",
+		"epoch": epoch,
+		"exp":   time.Now().Add(8 * time.Hour).Unix(),
 	})
 	signed, err := token.SignedString(s.JWTSecret)
 	if err != nil {
@@ -165,19 +213,12 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	http.SetCookie(w, &http.Cookie{
-		Name:     "session",
-		Value:    signed,
-		Path:     "/",
-		HttpOnly: true,
-		SameSite: http.SameSiteStrictMode,
-		MaxAge:   int((8 * time.Hour).Seconds()),
-	})
+	setSessionCookie(w, r, signed, 8*time.Hour)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
-	http.SetCookie(w, &http.Cookie{Name: "session", Value: "", MaxAge: -1, Path: "/"})
+	clearSessionCookie(w, r)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
@@ -212,15 +253,35 @@ func (s *Server) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "hash error")
 		return
 	}
-	if _, err := s.DB.ExecContext(r.Context(), `UPDATE app_config SET password_hash=? WHERE id=1`, string(newHash)); err != nil {
+	// Bump token_epoch to invalidate all existing sessions.
+	if _, err := s.DB.ExecContext(r.Context(),
+		`UPDATE app_config SET password_hash=?, token_epoch=token_epoch+1 WHERE id=1`,
+		string(newHash)); err != nil {
 		writeError(w, http.StatusInternalServerError, "update failed")
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
+// handleLogoutAll invalidates all sessions by bumping the token epoch.
+func (s *Server) handleLogoutAll(w http.ResponseWriter, r *http.Request) {
+	if _, err := s.DB.ExecContext(r.Context(),
+		`UPDATE app_config SET token_epoch=token_epoch+1 WHERE id=1`); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed")
+		return
+	}
+	clearSessionCookie(w, r)
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
 func (s *Server) authMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Try API token first (Bearer gv_...).
+		if apiToken := s.validateAPIToken(r); apiToken != nil {
+			next.ServeHTTP(w, r)
+			return
+		}
+
 		tokenStr := ""
 		if c, err := r.Cookie("session"); err == nil {
 			tokenStr = c.Value
@@ -243,6 +304,21 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 		if err != nil || !token.Valid {
 			writeError(w, http.StatusUnauthorized, "unauthorized")
 			return
+		}
+		// Check token epoch for session invalidation.
+		if claims, ok := token.Claims.(jwt.MapClaims); ok {
+			var dbEpoch int
+			if err := s.DB.QueryRowContext(r.Context(),
+				`SELECT token_epoch FROM app_config WHERE id=1`).Scan(&dbEpoch); err == nil {
+				tokenEpoch := 0
+				if e, ok := claims["epoch"].(float64); ok {
+					tokenEpoch = int(e)
+				}
+				if tokenEpoch != dbEpoch {
+					writeError(w, http.StatusUnauthorized, "session revoked")
+					return
+				}
+			}
 		}
 		next.ServeHTTP(w, r)
 	})

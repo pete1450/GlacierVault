@@ -108,6 +108,7 @@ Notes:
   server generates a random one and **prints it in the container log** on
   first boot — check `docker logs` and change it in Settings.
 - For SSO via your own identity provider, see [Authentication](auth.md).
+- For scripting and automation, see the [API reference](api.md).
 
 ```bash
 docker compose up -d

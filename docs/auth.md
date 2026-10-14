@@ -66,3 +66,41 @@ environment:
 - Session invalidation on password change ("log out all devices")
 - Scoped API tokens for automation
 - `Secure` cookie flag enforcement over HTTPS
+
+## Two-Factor Authentication (TOTP)
+
+Available in Settings → Security when using password auth. **Not available
+with OIDC/SSO** — when SSO is active, multi-factor authentication is managed
+by your identity provider (Authentik, Keycloak, etc.), not by GlacierVault.
+
+1. Click "Enable 2FA" — a QR code appears. Scan it with your authenticator
+   app (Google Authenticator, Authy, 1Password, etc.).
+2. Enter the 6-digit code to confirm. You'll receive 10 single-use backup
+   codes — save them somewhere safe.
+3. On next login, after your password, you'll be prompted for the current
+   TOTP code (or a backup code).
+
+To disable, enter your password in Settings → Security. Disabling clears
+the secret and all backup codes.
+
+## API Tokens
+
+For scripts and automation. Manage in Settings → Security → API Tokens.
+Tokens are long-lived, revocable, and shown only once at creation.
+
+- Click "Create token", give it a name and optional expiry (e.g. `720h`).
+- Copy the `gv_...` token immediately — it won't be shown again.
+- Use as `Authorization: Bearer gv_...` header.
+- Tokens bypass TOTP (they're for automation, not browsers).
+- Revoke anytime; revoked tokens stop working immediately.
+
+## Session Management
+
+Found in Settings → Security → Sessions.
+
+- Changing your password (Settings → General → Account) automatically logs
+  out all other devices.
+- "Log out all devices" revokes all sessions immediately without changing
+  the password.
+- Failed logins are rate-limited: 5 failures from an IP triggers a
+  15-minute lockout.
