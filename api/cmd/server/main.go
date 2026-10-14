@@ -111,17 +111,19 @@ func main() {
 	}
 
 	srv := &server.Server{
-		DB:         database,
-		Engine:     eng,
-		Catalog:    cat,
-		Scheduler:  sched,
-		RestoreMgr: restoreMgr,
-		CFManager:  cfMgr,
-		Notify:     notifyMgr,
-		JWTSecret:  jwtSecret,
-		ConfigPath: configDir,
-		OIDC:       oidcClient,
-		AuthType:   authType,
+		DB:           database,
+		Engine:       eng,
+		Catalog:      cat,
+		Scheduler:    sched,
+		RestoreMgr:   restoreMgr,
+		CFManager:    cfMgr,
+		Notify:       notifyMgr,
+		JWTSecret:    jwtSecret,
+		ConfigPath:   configDir,
+		OIDC:         oidcClient,
+		AuthType:     authType,
+		RateLimiter:  auth.NewRateLimiter(database),
+		TokenManager: auth.NewTokenManager(database),
 	}
 
 	log.Printf("GlacierVault listening on %s", listenAddr)

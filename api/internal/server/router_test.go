@@ -14,6 +14,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/glaciervault/api/internal/auth"
 	"github.com/glaciervault/api/internal/cloudfront"
 	appCrypto "github.com/glaciervault/api/internal/crypto"
 	"github.com/glaciervault/api/internal/notify"
@@ -33,12 +34,14 @@ func testServer(t *testing.T) *Server {
 	}
 	ntf := notify.New(db)
 	return &Server{
-		DB:         db,
-		Scheduler:  scheduler.New(db, nil, nil, nil),
-		Notify:     ntf,
-		RestoreMgr: restore.New(db, nil, nil, ntf),
-		CFManager:  cloudfront.NewManager(db),
-		JWTSecret:  []byte("test-secret-key-for-jwt-signing"),
+		DB:           db,
+		Scheduler:    scheduler.New(db, nil, nil, nil),
+		Notify:       ntf,
+		RestoreMgr:   restore.New(db, nil, nil, ntf),
+		CFManager:    cloudfront.NewManager(db),
+		JWTSecret:    []byte("test-secret-key-for-jwt-signing"),
+		RateLimiter:  auth.NewRateLimiter(db),
+		TokenManager: auth.NewTokenManager(db),
 	}
 }
 
@@ -806,5 +809,136 @@ func TestHandleGetRestoreWithData(t *testing.T) {
 	s.handleGetRestore(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("code = %d", rec.Code)
+	}
+}
+
+func TestHandleLoginRateLimited(t *testing.T) {
+	s := testServer(t)
+	setPassword(t, s.DB, "correct-password")
+
+	// Fail 5 times.
+	for i := 0; i < 5; i++ {
+		rec := httptest.NewRecorder()
+		body := strings.NewReader(`{"password":"wrong"}`)
+		req := httptest.NewRequest("POST", "/api/auth/login", body)
+		req.RemoteAddr = "1.2.3.4:1234"
+		s.handleLogin(rec, req)
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("attempt %d: code = %d, want 401", i, rec.Code)
+		}
+	}
+
+	// 6th attempt should be rate limited.
+	rec := httptest.NewRecorder()
+	body := strings.NewReader(`{"password":"wrong"}`)
+	req := httptest.NewRequest("POST", "/api/auth/login", body)
+	req.RemoteAddr = "1.2.3.4:1234"
+	s.handleLogin(rec, req)
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("code = %d, want 429", rec.Code)
+	}
+
+	// Different IP should still work.
+	rec = httptest.NewRecorder()
+	body = strings.NewReader(`{"password":"correct-password"}`)
+	req = httptest.NewRequest("POST", "/api/auth/login", body)
+	req.RemoteAddr = "5.6.7.8:1234"
+	s.handleLogin(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("different IP: code = %d, want 200", rec.Code)
+	}
+}
+
+func TestSessionInvalidatedOnPasswordChange(t *testing.T) {
+	s := testServer(t)
+	setPassword(t, s.DB, "old-password")
+
+	// Login to get a session.
+	rec := httptest.NewRecorder()
+	body := strings.NewReader(`{"password":"old-password"}`)
+	req := httptest.NewRequest("POST", "/api/auth/login", body)
+	s.handleLogin(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("login: code = %d", rec.Code)
+	}
+	// Extract session cookie.
+	var sessionCookie *http.Cookie
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == "session" {
+			sessionCookie = c
+		}
+	}
+	if sessionCookie == nil {
+		t.Fatal("no session cookie")
+	}
+
+	// Verify the session works.
+	rec2 := httptest.NewRecorder()
+	req2 := httptest.NewRequest("GET", "/api/auth/config", nil)
+	req2.AddCookie(sessionCookie)
+	// Use the middleware directly.
+	handler := s.authMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	handler.ServeHTTP(rec2, req2)
+	if rec2.Code != http.StatusOK {
+		t.Fatalf("before password change: code = %d, want 200", rec2.Code)
+	}
+
+	// Change password (this bumps the epoch).
+	rec3 := httptest.NewRecorder()
+	body3 := strings.NewReader(`{"currentPassword":"old-password","newPassword":"new-password-123"}`)
+	req3 := httptest.NewRequest("POST", "/api/auth/change-password", body3)
+	req3.AddCookie(sessionCookie)
+	s.handleChangePassword(rec3, req3)
+	if rec3.Code != http.StatusOK {
+		t.Fatalf("change password: code = %d", rec3.Code)
+	}
+
+	// Old session should now be rejected.
+	rec4 := httptest.NewRecorder()
+	req4 := httptest.NewRequest("GET", "/api/auth/config", nil)
+	req4.AddCookie(sessionCookie)
+	handler.ServeHTTP(rec4, req4)
+	if rec4.Code != http.StatusUnauthorized {
+		t.Fatalf("after password change: code = %d, want 401", rec4.Code)
+	}
+}
+
+func TestHandleLogoutAll(t *testing.T) {
+	s := testServer(t)
+	setPassword(t, s.DB, "password123")
+
+	// Login.
+	rec := httptest.NewRecorder()
+	body := strings.NewReader(`{"password":"password123"}`)
+	req := httptest.NewRequest("POST", "/api/auth/login", body)
+	s.handleLogin(rec, req)
+	var sessionCookie *http.Cookie
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == "session" {
+			sessionCookie = c
+		}
+	}
+
+	// Logout all.
+	rec2 := httptest.NewRecorder()
+	req2 := httptest.NewRequest("POST", "/api/auth/logout-all", nil)
+	req2.AddCookie(sessionCookie)
+	s.handleLogoutAll(rec2, req2)
+	if rec2.Code != http.StatusOK {
+		t.Fatalf("logout-all: code = %d", rec2.Code)
+	}
+
+	// Session should be invalid.
+	rec3 := httptest.NewRecorder()
+	req3 := httptest.NewRequest("GET", "/api/auth/config", nil)
+	req3.AddCookie(sessionCookie)
+	handler := s.authMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	handler.ServeHTTP(rec3, req3)
+	if rec3.Code != http.StatusUnauthorized {
+		t.Fatalf("after logout-all: code = %d, want 401", rec3.Code)
 	}
 }

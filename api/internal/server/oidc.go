@@ -106,10 +106,14 @@ func (s *Server) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Create a session JWT. The subject is the OIDC email.
+	// Include the token epoch for session invalidation.
+	var epoch int
+	s.DB.QueryRowContext(r.Context(), `SELECT token_epoch FROM app_config WHERE id=1`).Scan(&epoch)
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
 		"sub":   email,
 		"name":  name,
 		"email": email,
+		"epoch": epoch,
 		"exp":   time.Now().Add(8 * time.Hour).Unix(),
 	})
 	signed, err := token.SignedString(s.JWTSecret)
@@ -118,14 +122,7 @@ func (s *Server) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	http.SetCookie(w, &http.Cookie{
-		Name:     "session",
-		Value:    signed,
-		Path:     "/",
-		HttpOnly: true,
-		SameSite: http.SameSiteStrictMode,
-		MaxAge:   int((8 * time.Hour).Seconds()),
-	})
+	setSessionCookie(w, r, signed, 8*time.Hour)
 
 	// Redirect to the app root.
 	http.Redirect(w, r, "/", http.StatusFound)
