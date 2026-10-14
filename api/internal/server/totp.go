@@ -19,8 +19,12 @@ func (s *Server) handleTOTPStatus(w http.ResponseWriter, r *http.Request) {
 
 // handleTOTPSetup generates a new TOTP secret and returns the QR code URL.
 // The secret is stored but not enabled until verified.
+// Not available when OIDC is active (MFA is delegated to the IdP).
 func (s *Server) handleTOTPSetup(w http.ResponseWriter, r *http.Request) {
-	secret, url, err := auth.GenerateTOTPSecret("GlacierVault", "admin")
+	if s.AuthType == "oidc" {
+		writeError(w, http.StatusBadRequest, "totp not available with oidc; configure mfa at your identity provider")
+		return
+	}	secret, url, err := auth.GenerateTOTPSecret("GlacierVault", "admin")
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to generate secret")
 		return

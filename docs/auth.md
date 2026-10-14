@@ -69,7 +69,9 @@ environment:
 
 ## Two-Factor Authentication (TOTP)
 
-Available in Settings → Security when using password auth.
+Available in Settings → Security when using password auth. **Not available
+with OIDC/SSO** — when SSO is active, multi-factor authentication is managed
+by your identity provider (Authentik, Keycloak, etc.), not by GlacierVault.
 
 1. Click "Enable 2FA" — a QR code appears. Scan it with your authenticator
    app (Google Authenticator, Authy, 1Password, etc.).

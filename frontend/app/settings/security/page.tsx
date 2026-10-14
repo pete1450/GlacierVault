@@ -8,6 +8,7 @@ import {
 } from '@/lib/api'
 
 export default function SecurityPage() {
+  const [authType, setAuthType] = useState<string | null>(null)
   // TOTP state
   const [totpEnabled, setTotpEnabled] = useState<boolean | null>(null)
   const [qrUrl, setQrUrl] = useState('')
@@ -29,6 +30,10 @@ export default function SecurityPage() {
   const [sessionMsg, setSessionMsg] = useState('')
 
   useEffect(() => {
+    fetch('/api/auth/config')
+      .then(r => r.json())
+      .then(d => setAuthType(d.authType || 'password'))
+      .catch(() => setAuthType('password'))
     getTOTPStatus().then(s => setTotpEnabled(s.enabled)).catch(() => setTotpEnabled(false))
     listAPITokens().then(setTokens).catch(() => {})
   }, [])
@@ -117,7 +122,8 @@ export default function SecurityPage() {
 
   return (
     <div className="space-y-6">
-      {/* Two-factor authentication */}
+      {/* Two-factor authentication — password auth only; OIDC delegates MFA to the IdP */}
+      {authType !== 'oidc' && (
       <section className="bg-surface rounded-xl p-6 space-y-4">
         <h2 className="font-semibold text-lg">Two-Factor Authentication</h2>
         {totpEnabled === null ? (
@@ -197,6 +203,16 @@ export default function SecurityPage() {
         )}
         {totpMsg && <p className={`text-sm ${totpMsg.startsWith('Error') ? 'text-err' : 'text-body'}`}>{totpMsg}</p>}
       </section>
+      )}
+      {authType === 'oidc' && (
+        <section className="bg-surface rounded-xl p-6 space-y-2">
+          <h2 className="font-semibold text-lg">Two-Factor Authentication</h2>
+          <p className="text-sm text-muted">
+            You&apos;re signed in with SSO. Multi-factor authentication is managed by your
+            identity provider, not here.
+          </p>
+        </section>
+      )}
 
       {/* API tokens */}
       <section className="bg-surface rounded-xl p-6 space-y-4">
