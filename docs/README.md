@@ -14,6 +14,8 @@ Start here, then follow the guides in order:
 | [Setup](setup.md) | Prerequisites, creating an IAM user with the right permissions, Docker deployment, and the setup wizard |
 | [User Workflow](workflow.md) | End-to-end usage: setup → create backup → monitor snapshots → restore → prune → disaster recovery |
 | [Page Overview](pages.md) | What every page in the UI does, section by section |
+| [Authentication](auth.md) | Password auth, OIDC/SSO, TOTP 2FA, API tokens, session management, and cookie hardening |
+| [API Reference](api.md) | All REST endpoints with request/response shapes and curl examples |
 
 Related reading already in the repo root:
 
