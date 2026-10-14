@@ -66,3 +66,36 @@ environment:
 - Session invalidation on password change ("log out all devices")
 - Scoped API tokens for automation
 - `Secure` cookie flag enforcement over HTTPS
+
+## Two-Factor Authentication (TOTP)
+
+Available in Settings when using password auth.
+
+1. Click "Enable 2FA" — a QR code appears. Scan it with your authenticator
+   app (Google Authenticator, Authy, 1Password, etc.).
+2. Enter the 6-digit code to confirm. You'll receive 10 single-use backup
+   codes — save them somewhere safe.
+3. On next login, after your password, you'll be prompted for the current
+   TOTP code (or a backup code).
+
+To disable, enter your password in Settings. Disabling clears the secret
+and all backup codes.
+
+## API Tokens
+
+For scripts and automation. Tokens are long-lived, revocable, and shown
+only once at creation.
+
+- Create in Settings → API Tokens. Give it a name and optional expiry.
+- Use as `Authorization: Bearer gv_...` header.
+- Tokens bypass TOTP (they're for automation, not browsers).
+- Revoke anytime; revoked tokens stop working immediately.
+
+## Session Management
+
+- Changing your password invalidates all existing sessions (other devices
+  are logged out).
+- "Log out all devices" in Settings does the same without changing the
+  password.
+- Failed logins are rate-limited: 5 failures from an IP triggers a
+  15-minute lockout.
