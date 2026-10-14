@@ -24,7 +24,8 @@ func (s *Server) handleTOTPSetup(w http.ResponseWriter, r *http.Request) {
 	if s.AuthType == "oidc" {
 		writeError(w, http.StatusBadRequest, "totp not available with oidc; configure mfa at your identity provider")
 		return
-	}	secret, url, err := auth.GenerateTOTPSecret("GlacierVault", "admin")
+	}
+	secret, url, err := auth.GenerateTOTPSecret("GlacierVault", "admin")
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to generate secret")
 		return

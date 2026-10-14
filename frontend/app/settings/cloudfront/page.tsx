@@ -12,9 +12,6 @@ export default function CloudFrontPage() {
   const [cfMsg, setCfMsg] = useState('')
   const [cfBusy, setCfBusy] = useState(false)
 
-  async function refreshCf() {
-    try { setCf(await getCloudFrontStatus()) } catch {}
-  }
   useEffect(() => { refreshCf() }, [])
 
   async function handleCfEnable(e: React.FormEvent) {
