@@ -22,10 +22,10 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	"golang.org/x/crypto/bcrypt"
 
+	"github.com/glaciervault/api/internal/auth"
 	"github.com/glaciervault/api/internal/catalog"
 	"github.com/glaciervault/api/internal/cloudfront"
 	appCrypto "github.com/glaciervault/api/internal/crypto"
-	"github.com/glaciervault/api/internal/auth"
 	"github.com/glaciervault/api/internal/engine"
 	"github.com/glaciervault/api/internal/notify"
 	"github.com/glaciervault/api/internal/provisioning"

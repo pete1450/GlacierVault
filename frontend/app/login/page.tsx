@@ -52,7 +52,7 @@ export default function LoginPage() {
             Sign in with SSO
           </button>
           <p className="text-muted text-xs mt-4 text-center">
-            You'll be redirected to your identity provider.
+            You&apos;ll be redirected to your identity provider.
           </p>
         </div>
       </div>
