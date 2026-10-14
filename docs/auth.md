@@ -69,7 +69,7 @@ environment:
 
 ## Two-Factor Authentication (TOTP)
 
-Available in Settings when using password auth.
+Available in Settings → Security when using password auth.
 
 1. Click "Enable 2FA" — a QR code appears. Scan it with your authenticator
    app (Google Authenticator, Authy, 1Password, etc.).
@@ -78,24 +78,27 @@ Available in Settings when using password auth.
 3. On next login, after your password, you'll be prompted for the current
    TOTP code (or a backup code).
 
-To disable, enter your password in Settings. Disabling clears the secret
-and all backup codes.
+To disable, enter your password in Settings → Security. Disabling clears
+the secret and all backup codes.
 
 ## API Tokens
 
-For scripts and automation. Tokens are long-lived, revocable, and shown
-only once at creation.
+For scripts and automation. Manage in Settings → Security → API Tokens.
+Tokens are long-lived, revocable, and shown only once at creation.
 
-- Create in Settings → API Tokens. Give it a name and optional expiry.
+- Click "Create token", give it a name and optional expiry (e.g. `720h`).
+- Copy the `gv_...` token immediately — it won't be shown again.
 - Use as `Authorization: Bearer gv_...` header.
 - Tokens bypass TOTP (they're for automation, not browsers).
 - Revoke anytime; revoked tokens stop working immediately.
 
 ## Session Management
 
-- Changing your password invalidates all existing sessions (other devices
-  are logged out).
-- "Log out all devices" in Settings does the same without changing the
-  password.
+Found in Settings → Security → Sessions.
+
+- Changing your password (Settings → General → Account) automatically logs
+  out all other devices.
+- "Log out all devices" revokes all sessions immediately without changing
+  the password.
 - Failed logins are rate-limited: 5 failures from an IP triggers a
   15-minute lockout.
