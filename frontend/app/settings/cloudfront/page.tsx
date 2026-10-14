@@ -12,6 +12,10 @@ export default function CloudFrontPage() {
   const [cfMsg, setCfMsg] = useState('')
   const [cfBusy, setCfBusy] = useState(false)
 
+  async function refreshCf() {
+    try { setCf(await getCloudFrontStatus()) } catch {}
+  }
+
   useEffect(() => { refreshCf() }, [])
 
   async function handleCfEnable(e: React.FormEvent) {
@@ -47,10 +51,6 @@ export default function CloudFrontPage() {
     } catch (err) {
       setCfMsg(`Error: ${errMsg(err)}`)
     }
-  }
-
-  async function refreshCf() {
-    try { setCf(await getCloudFrontStatus()) } catch {}
   }
 
   return (
