@@ -25,6 +25,7 @@ import (
 	"github.com/glaciervault/api/internal/catalog"
 	"github.com/glaciervault/api/internal/cloudfront"
 	appCrypto "github.com/glaciervault/api/internal/crypto"
+	"github.com/glaciervault/api/internal/auth"
 	"github.com/glaciervault/api/internal/engine"
 	"github.com/glaciervault/api/internal/notify"
 	"github.com/glaciervault/api/internal/provisioning"
@@ -45,6 +46,8 @@ type Server struct {
 	Notify     *notify.Manager
 	JWTSecret  []byte
 	ConfigPath string
+	OIDC       *auth.OIDCClient
+	AuthType   string // "password" (default) or "oidc"
 }
 
 func (s *Server) Router() http.Handler {
@@ -55,6 +58,9 @@ func (s *Server) Router() http.Handler {
 
 	// Public routes.
 	r.Post("/api/auth/login", s.handleLogin)
+	r.Get("/api/auth/oidc/login", s.handleOIDCLogin)
+	r.Get("/api/auth/oidc/callback", s.handleOIDCCallback)
+	r.Get("/api/auth/config", s.handleAuthConfig)
 
 	// Protected routes.
 	r.Group(func(r chi.Router) {
