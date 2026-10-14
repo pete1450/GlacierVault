@@ -48,6 +48,10 @@ curl -s -X POST http://localhost:8080/api/auth/totp/verify-login \
 Returns `{"authType":"password"}` or `{"authType":"oidc"}`. Used by the login
 page to decide whether to show the password form or the SSO button.
 
+### `GET /api/version`
+Returns `{"version":"..."}` — the build version (git SHA in Docker images,
+`"dev"` for local builds). No auth required. Shown in the sidebar footer.
+
 ### `GET /api/auth/oidc/login`
 Starts the OIDC flow. Redirects to the identity provider.
 

@@ -12,12 +12,14 @@ import (
 )
 
 // OIDCConfig holds the OIDC provider settings from environment.
+// Note: no RedirectURL — it's derived per-request from the incoming HTTP
+// request (scheme + host + callback path). Register the resulting URL
+// (e.g. https://your-host/api/auth/oidc/callback) in your IdP.
 type OIDCConfig struct {
 	Enabled      bool
 	Issuer       string
 	ClientID     string
 	ClientSecret string
-	RedirectURL  string
 }
 
 // OIDCClient wraps the OIDC provider and OAuth2 config.
@@ -46,7 +48,6 @@ func NewOIDCClient(ctx context.Context, cfg OIDCConfig) (*OIDCClient, error) {
 	oauth2Config := oauth2.Config{
 		ClientID:     cfg.ClientID,
 		ClientSecret: cfg.ClientSecret,
-		RedirectURL:  cfg.RedirectURL,
 		Endpoint:     provider.Endpoint(),
 		Scopes:       []string{oidc.ScopeOpenID, "profile", "email"},
 	}
@@ -59,8 +60,11 @@ func NewOIDCClient(ctx context.Context, cfg OIDCConfig) (*OIDCClient, error) {
 }
 
 // AuthCodeURL returns the URL to redirect the user to for authentication.
-func (c *OIDCClient) AuthCodeURL(state string) string {
-	return c.oauth2.AuthCodeURL(state, oauth2.AccessTypeOnline)
+// The redirectURL is derived per-request so no static configuration is needed.
+func (c *OIDCClient) AuthCodeURL(state, redirectURL string) string {
+	cfg := c.oauth2
+	cfg.RedirectURL = redirectURL
+	return cfg.AuthCodeURL(state, oauth2.AccessTypeOnline)
 }
 
 // Exchange exchanges the authorization code for tokens and verifies the ID token.

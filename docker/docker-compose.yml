@@ -35,7 +35,6 @@ services:
       - OIDC_ISSUER=${OIDC_ISSUER:-}
       - OIDC_CLIENT_ID=${OIDC_CLIENT_ID:-}
       - OIDC_CLIENT_SECRET=${OIDC_CLIENT_SECRET:-}
-      - OIDC_REDIRECT_URL=${OIDC_REDIRECT_URL:-http://localhost:8080/api/auth/oidc/callback}
       # ── End Authentication ──────────────────────────────────────────────
       # Timezone that backup schedules (cron expressions) evaluate in.
       # Use an IANA name, e.g. America/Chicago, Europe/Berlin.

@@ -26,6 +26,17 @@ func (s *Server) handleAuthConfig(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// handleVersion returns the build version. Public — no auth required.
+func (s *Server) handleVersion(w http.ResponseWriter, r *http.Request) {
+	v := s.Version
+	if v == "" {
+		v = "dev"
+	}
+	writeJSON(w, http.StatusOK, map[string]string{
+		"version": v,
+	})
+}
+
 // handleOIDCLogin initiates the OIDC flow by redirecting to the IdP.
 func (s *Server) handleOIDCLogin(w http.ResponseWriter, r *http.Request) {
 	if s.OIDC == nil {
@@ -59,7 +70,15 @@ func (s *Server) handleOIDCLogin(w http.ResponseWriter, r *http.Request) {
 		MaxAge:   int(auth.StateExpiry.Seconds()),
 	})
 
-	http.Redirect(w, r, s.OIDC.AuthCodeURL(state), http.StatusFound)
+	// Derive the redirect URL from the request — no static config needed.
+	// Register this URL (scheme://host/api/auth/oidc/callback) in the IdP.
+	scheme := "http"
+	if r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https" {
+		scheme = "https"
+	}
+	redirectURL := scheme + "://" + r.Host + "/api/auth/oidc/callback"
+
+	http.Redirect(w, r, s.OIDC.AuthCodeURL(state, redirectURL), http.StatusFound)
 }
 
 // handleOIDCCallback handles the OIDC provider callback.

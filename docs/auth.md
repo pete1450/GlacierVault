@@ -28,7 +28,6 @@ environment:
   - OIDC_ISSUER=https://auth.example.com/application/o/glaciervault/
   - OIDC_CLIENT_ID=your-client-id
   - OIDC_CLIENT_SECRET=your-client-secret
-  - OIDC_REDIRECT_URL=https://vault.example.com/api/auth/oidc/callback
 ```
 
 ### Setup
@@ -40,6 +39,11 @@ environment:
 3. Set `AUTH_TYPE=oidc` and restart the container.
 4. The login page will show a "Sign in with SSO" button instead of the
    password form.
+
+The redirect URL is derived automatically from the incoming request
+(scheme + host + `/api/auth/oidc/callback`) — no configuration needed.
+Just make sure the redirect URI registered in your IdP matches the public
+URL users hit, including scheme and port.
 
 ### How it works
 
@@ -56,8 +60,6 @@ environment:
   database is ignored.
 - To switch back to password auth, set `AUTH_TYPE=password` and restart.
   Your original password (or `INITIAL_PASSWORD`) still works.
-- `OIDC_REDIRECT_URL` must exactly match the redirect URI registered with
-  your provider, including scheme and port.
 
 ## Planned improvements
 

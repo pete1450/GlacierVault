@@ -1,12 +1,14 @@
 # ── Stage 1: Build Go API ───────────────────────────────────────────────────
 FROM golang:1.27-trixie AS go-builder
 
+ARG VERSION=dev
+
 WORKDIR /build/api
 COPY api/go.mod ./
 # Copy source before tidy so go can resolve all imports.
 COPY api/ ./
 RUN go mod tidy && go mod download
-RUN CGO_ENABLED=1 GOOS=linux go build -o /out/glaciervault-api ./cmd/server
+RUN CGO_ENABLED=1 GOOS=linux go build -ldflags "-X main.version=${VERSION}" -o /out/glaciervault-api ./cmd/server
 
 # ── Stage 2: Build Next.js frontend ─────────────────────────────────────────
 FROM node:26-trixie-slim AS frontend-builder

@@ -24,6 +24,10 @@ import (
 	"github.com/glaciervault/api/internal/server"
 )
 
+// version is set at build time via -ldflags "-X main.version=...".
+// Defaults to "dev" for local builds.
+var version = "dev"
+
 func main() {
 	configDir := env("CONFIG_DIR", "/config")
 	databasePath := env("DATABASE_PATH", "/database/glaciervault.db")
@@ -98,7 +102,6 @@ func main() {
 			Issuer:       os.Getenv("OIDC_ISSUER"),
 			ClientID:     os.Getenv("OIDC_CLIENT_ID"),
 			ClientSecret: os.Getenv("OIDC_CLIENT_SECRET"),
-			RedirectURL:  env("OIDC_REDIRECT_URL", "http://localhost:8080/api/auth/oidc/callback"),
 		}
 		var err error
 		oidcClient, err = auth.NewOIDCClient(context.Background(), oidcCfg)
@@ -124,6 +127,7 @@ func main() {
 		AuthType:     authType,
 		RateLimiter:  auth.NewRateLimiter(database),
 		TokenManager: auth.NewTokenManager(database),
+		Version:      version,
 	}
 
 	log.Printf("GlacierVault listening on %s", listenAddr)

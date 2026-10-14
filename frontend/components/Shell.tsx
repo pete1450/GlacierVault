@@ -1,5 +1,5 @@
 'use client'
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import { logout } from '@/lib/api'
@@ -80,6 +80,13 @@ function NavLinks({ onNavigate }: { onNavigate?: () => void }) {
 
 function SidebarFooter() {
   const router = useRouter()
+  const [version, setVersion] = useState('')
+  useEffect(() => {
+    fetch('/api/version')
+      .then(r => r.json())
+      .then(d => setVersion(d.version || ''))
+      .catch(() => {})
+  }, [])
   async function handleLogout() {
     try {
       await logout()
@@ -96,6 +103,11 @@ function SidebarFooter() {
         <span className="text-base leading-none">⎋</span>
         <span>Logout</span>
       </button>
+      {version && version !== 'dev' && (
+        <p className="px-3 pt-1 text-xs text-muted font-mono" title={version}>
+          v{version.slice(0, 7)}
+        </p>
+      )}
     </div>
   )
 }

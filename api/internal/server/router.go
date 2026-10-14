@@ -50,6 +50,7 @@ type Server struct {
 	AuthType     string // "password" (default) or "oidc"
 	RateLimiter  *auth.RateLimiter
 	TokenManager *auth.TokenManager
+	Version      string // build version, e.g. git SHA or tag
 }
 
 func (s *Server) Router() http.Handler {
@@ -64,6 +65,7 @@ func (s *Server) Router() http.Handler {
 	r.Get("/api/auth/oidc/login", s.handleOIDCLogin)
 	r.Get("/api/auth/oidc/callback", s.handleOIDCCallback)
 	r.Get("/api/auth/config", s.handleAuthConfig)
+	r.Get("/api/version", s.handleVersion)
 
 	// Protected routes.
 	r.Group(func(r chi.Router) {
