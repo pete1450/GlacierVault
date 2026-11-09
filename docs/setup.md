@@ -25,34 +25,234 @@ In the AWS Console:
    - **Simple:** attach the AWS-managed `AdministratorAccess` policy. Easiest,
      and safe enough for a credential you will use once and can delete after
      setup completes.
-   - **Scoped:** attach a custom policy with roughly these permissions
-     (CDK bootstrap + deploy needs all of them):
+   - **Scoped:** attach a custom policy. CDK bootstrap + deploy + the app's
+     CloudFront provisioning need the permissions below — no `service:*`
+     wildcards, and resources scoped wherever AWS allows it. Replace
+     `<account>` with your AWS account ID, `<region>` with your region, and
+     `<stack>` with the stack name (default `rustic-cold-backups`).
 
      ```json
      {
        "Version": "2012-10-17",
-       "Statement": [{
-         "Effect": "Allow",
-         "Action": [
-           "cloudformation:*",
-           "iam:*",
-           "s3:*",
-           "sqs:*",
-           "cloudfront:*",
-           "sts:GetCallerIdentity",
-           "ecr:*",
-           "ssm:PutParameter",
-           "ssm:GetParameter"
-         ],
-         "Resource": "*"
-       }]
+       "Statement": [
+         {
+           "Sid": "STSIdentity",
+           "Effect": "Allow",
+           "Action": ["sts:GetCallerIdentity"],
+           "Resource": "*"
+         },
+         {
+           "Sid": "CloudFormationStacks",
+           "Effect": "Allow",
+           "Action": [
+             "cloudformation:CreateStack",
+             "cloudformation:UpdateStack",
+             "cloudformation:DeleteStack",
+             "cloudformation:DescribeStacks",
+             "cloudformation:DescribeStackEvents",
+             "cloudformation:DescribeStackResources",
+             "cloudformation:GetTemplate",
+             "cloudformation:GetTemplateSummary",
+             "cloudformation:CreateChangeSet",
+             "cloudformation:DescribeChangeSet",
+             "cloudformation:ExecuteChangeSet",
+             "cloudformation:DeleteChangeSet",
+             "cloudformation:ValidateTemplate",
+             "cloudformation:ListStacks"
+           ],
+           "Resource": [
+             "arn:aws:cloudformation:<region>:<account>:stack/CDKToolkit/*",
+             "arn:aws:cloudformation:<region>:<account>:stack/<stack>/*"
+           ]
+         },
+         {
+           "Sid": "IAMCDKBootstrapRoles",
+           "Effect": "Allow",
+           "Action": [
+             "iam:GetRole",
+             "iam:CreateRole",
+             "iam:DeleteRole",
+             "iam:PutRolePolicy",
+             "iam:DeleteRolePolicy",
+             "iam:AttachRolePolicy",
+             "iam:DetachRolePolicy",
+             "iam:UpdateAssumeRolePolicy",
+             "iam:TagRole",
+             "iam:PassRole"
+           ],
+           "Resource": [
+             "arn:aws:iam::<account>:role/cdk-*-deploy-role-<account>-<region>",
+             "arn:aws:iam::<account>:role/cdk-*-file-publishing-role-<account>-<region>",
+             "arn:aws:iam::<account>:role/cdk-*-image-publishing-role-<account>-<region>",
+             "arn:aws:iam::<account>:role/cdk-*-lookup-role-<account>-<region>",
+             "arn:aws:iam::<account>:role/cdk-*-cfn-exec-role-<account>-<region>"
+           ]
+         },
+         {
+           "Sid": "IAMStackResourcesViaCloudFormation",
+           "Effect": "Allow",
+           "Action": [
+             "iam:CreateUser",
+             "iam:DeleteUser",
+             "iam:GetUser",
+             "iam:PutUserPolicy",
+             "iam:DeleteUserPolicy",
+             "iam:GetUserPolicy",
+             "iam:CreateAccessKey",
+             "iam:CreateRole",
+             "iam:DeleteRole",
+             "iam:GetRole",
+             "iam:PutRolePolicy",
+             "iam:DeleteRolePolicy",
+             "iam:AttachRolePolicy",
+             "iam:DetachRolePolicy",
+             "iam:PassRole"
+           ],
+           "Resource": "*",
+           "Condition": {
+             "StringEquals": {
+               "aws:CalledVia": "cloudformation.amazonaws.com"
+             }
+           }
+         },
+         {
+           "Sid": "S3CDKAssetBucket",
+           "Effect": "Allow",
+           "Action": [
+             "s3:CreateBucket",
+             "s3:DeleteBucket",
+             "s3:GetBucketLocation",
+             "s3:GetBucketPolicy",
+             "s3:PutBucketPolicy",
+             "s3:GetBucketVersioning",
+             "s3:PutBucketVersioning",
+             "s3:GetBucketEncryption",
+             "s3:PutBucketEncryption",
+             "s3:GetBucketPublicAccessBlock",
+             "s3:PutBucketPublicAccessBlock",
+             "s3:ListBucket",
+             "s3:GetObject",
+             "s3:PutObject",
+             "s3:DeleteObject"
+           ],
+           "Resource": [
+             "arn:aws:s3:::cdk-*-assets-<account>-<region>",
+             "arn:aws:s3:::cdk-*-assets-<account>-<region>/*"
+           ]
+         },
+         {
+           "Sid": "S3StackBucketsViaCloudFormation",
+           "Effect": "Allow",
+           "Action": [
+             "s3:CreateBucket",
+             "s3:DeleteBucket",
+             "s3:GetBucketLocation",
+             "s3:GetBucketPolicy",
+             "s3:PutBucketPolicy",
+             "s3:GetBucketVersioning",
+             "s3:PutBucketVersioning",
+             "s3:GetBucketEncryption",
+             "s3:PutBucketEncryption",
+             "s3:ListBucket",
+             "s3:GetObject",
+             "s3:PutObject",
+             "s3:DeleteObject"
+           ],
+           "Resource": "arn:aws:s3:::<stack>-*",
+           "Condition": {
+             "StringEquals": {
+               "aws:CalledVia": "cloudformation.amazonaws.com"
+             }
+           }
+         },
+         {
+           "Sid": "S3ColdBucketPolicyForCloudFront",
+           "Effect": "Allow",
+           "Action": ["s3:GetBucketPolicy", "s3:PutBucketPolicy"],
+           "Resource": "arn:aws:s3:::<stack>-*"
+         },
+         {
+           "Sid": "SQSStackQueue",
+           "Effect": "Allow",
+           "Action": [
+             "sqs:CreateQueue",
+             "sqs:DeleteQueue",
+             "sqs:GetQueueAttributes",
+             "sqs:GetQueueUrl",
+             "sqs:SetQueueAttributes",
+             "sqs:TagQueue",
+             "sqs:ListQueues"
+           ],
+           "Resource": "arn:aws:sqs:<region>:<account>:<stack>-*"
+         },
+         {
+           "Sid": "ECRCDKAssets",
+           "Effect": "Allow",
+           "Action": [
+             "ecr:CreateRepository",
+             "ecr:DeleteRepository",
+             "ecr:DescribeRepositories",
+             "ecr:BatchCheckLayerAvailability",
+             "ecr:PutImage",
+             "ecr:InitiateLayerUpload",
+             "ecr:UploadLayerPart",
+             "ecr:CompleteLayerUpload"
+           ],
+           "Resource": "arn:aws:ecr:<region>:<account>:repository/cdk-*-container-assets-<account>-<region>"
+         },
+         {
+           "Sid": "ECRAuthToken",
+           "Effect": "Allow",
+           "Action": ["ecr:GetAuthorizationToken"],
+           "Resource": "*"
+         },
+         {
+           "Sid": "SSMCDKBootstrap",
+           "Effect": "Allow",
+           "Action": ["ssm:GetParameter", "ssm:PutParameter", "ssm:DeleteParameter"],
+           "Resource": "arn:aws:ssm:<region>:<account>:parameter/cdk-bootstrap/*"
+         },
+         {
+           "Sid": "CloudFrontProvisioning",
+           "Effect": "Allow",
+           "Action": [
+             "cloudfront:CreateDistribution",
+             "cloudfront:GetDistribution",
+             "cloudfront:UpdateDistribution",
+             "cloudfront:DeleteDistribution",
+             "cloudfront:CreateOriginAccessControl",
+             "cloudfront:GetOriginAccessControl",
+             "cloudfront:CreatePublicKey",
+             "cloudfront:GetPublicKey",
+             "cloudfront:CreateKeyGroup",
+             "cloudfront:GetKeyGroup",
+             "cloudfront:CreateCachePolicy",
+             "cloudfront:GetCachePolicy",
+             "cloudfront:ListDistributions"
+           ],
+           "Resource": "*"
+         }
+       ]
      }
      ```
 
-     > In practice CDK touches IAM, S3, SQS, and CloudFormation. The `ecr:*`
-     > entry covers CDK asset publishing if your bootstrap uses it; omit it
-     > if your bootstrap is already in place. `cloudfront:*` is needed for
-     > the free-egress distribution the app provisions after the CDK deploy.
+     Notes on what couldn't be narrowed further:
+     - **`sts:GetCallerIdentity` and `ecr:GetAuthorizationToken`** don't
+       support resource-level permissions — `*` is the only option.
+     - **CloudFront create actions** (distribution, OAC, key group, cache
+       policy, public key) don't support resource-level permissions either.
+       Actions are enumerated instead of `cloudfront:*`, which is the best
+       AWS allows.
+     - **IAM/S3 calls made by CloudFormation itself** (creating the stack's
+       user, batch role, and buckets, whose names CDK generates) are gated
+       by the `aws:CalledVia: cloudformation.amazonaws.com` condition — the
+       credential can only make those calls when CloudFormation is the
+       caller, not directly.
+     - **CDK-generated names** start with the stack name, so `<stack>-*`
+       matches the stack's buckets and queue. If you renamed the stack,
+       update the prefix.
+     - If your bootstrap is already in place and you never use container
+       assets, the two `ECR*` statements can be dropped.
      > `ssm:PutParameter` / `ssm:GetParameter` are for the `/cdk-bootstrap/…`
      > version key that `cdk bootstrap` writes — without them bootstrap fails.
      >
