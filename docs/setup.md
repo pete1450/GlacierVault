@@ -31,6 +31,11 @@ In the AWS Console:
      `ACCOUNT_ID` with your AWS account ID, `REGION` with your region, and
      `STACK_NAME` with the stack name (default `rustic-cold-backups`).
 
+     The same policy is also available as a standalone file,
+     [`docs/setup-credential-policy.json`](setup-credential-policy.json) —
+     copy it and replace the placeholders, or use it as-is after replacing
+     them, rather than copying from this page.
+
      ```json
      {
        "Version": "2012-10-17",
