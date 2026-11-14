@@ -197,6 +197,157 @@ In the AWS Console:
 > its access key). The appliance provisions its own limited `rustic-iam-user`
 > and never needs the setup credentials again.
 
+### Scoping down the cfn-exec role (optional, recommended)
+
+`cdk bootstrap` attaches the AWS-managed `AdministratorAccess` policy to the
+`cdk-hnb659fds-cfn-exec-role-ACCOUNT_ID-REGION` role — the role CloudFormation
+assumes to create and manage stack resources. That is CDK's default, not
+something this stack needs: the stack creates a fixed, known set of resources
+and adds no new resource types, so the role can be scoped to exactly those.
+
+The stack (upstream `rustic-rs/rustic-aws`, `glacier-cold-storage-cdk`) creates
+only:
+
+- 4 S3 buckets: hot, cold, batch-manifests, batch-reports
+  (SSL-enforced, lifecycle rules, `RemovalPolicy.DESTROY`, no versioning)
+- 1 SQS queue: cold-events-queue, plus the S3 → SQS notification on the cold
+  bucket (`OBJECT_RESTORE_COMPLETED`)
+- 1 IAM role: `STACK_NAME-s3batchrole*` (assumed by S3 Batch operations)
+- 1 IAM user: `STACK_NAME-user*` with one managed policy
+
+No Lambda, no KMS keys, no nested stacks, no custom resources — and
+CloudFront is provisioned by the app itself, not by this stack, so the role
+needs no CloudFront permissions at all.
+
+Create this as a customer managed policy, then swap it in for
+`AdministratorAccess` on the cfn-exec role:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "StackBuckets",
+      "Effect": "Allow",
+      "Action": [
+        "s3:CreateBucket", "s3:DeleteBucket",
+        "s3:GetBucketLocation", "s3:ListBucket",
+        "s3:GetBucketPolicy", "s3:PutBucketPolicy", "s3:DeleteBucketPolicy",
+        "s3:GetLifecycleConfiguration", "s3:PutLifecycleConfiguration",
+        "s3:GetBucketVersioning", "s3:PutBucketVersioning",
+        "s3:GetEncryptionConfiguration", "s3:PutEncryptionConfiguration",
+        "s3:GetBucketPublicAccessBlock", "s3:PutBucketPublicAccessBlock",
+        "s3:GetBucketOwnershipControls", "s3:PutBucketOwnershipControls",
+        "s3:GetBucketNotification", "s3:PutBucketNotification",
+        "s3:GetBucketTagging", "s3:PutBucketTagging",
+        "s3:GetBucketAcl", "s3:PutBucketAcl"
+      ],
+      "Resource": "arn:aws:s3:::STACK_NAME-*"
+    },
+    {
+      "Sid": "StackQueue",
+      "Effect": "Allow",
+      "Action": [
+        "sqs:CreateQueue", "sqs:DeleteQueue",
+        "sqs:GetQueueAttributes", "sqs:SetQueueAttributes", "sqs:GetQueueUrl",
+        "sqs:TagQueue", "sqs:UntagQueue", "sqs:ListQueueTags"
+      ],
+      "Resource": "arn:aws:sqs:REGION:ACCOUNT_ID:STACK_NAME-*"
+    },
+    {
+      "Sid": "StackBatchRole",
+      "Effect": "Allow",
+      "Action": [
+        "iam:CreateRole", "iam:DeleteRole", "iam:GetRole",
+        "iam:TagRole", "iam:UntagRole", "iam:UpdateAssumeRolePolicy",
+        "iam:PutRolePolicy", "iam:DeleteRolePolicy", "iam:GetRolePolicy",
+        "iam:ListRolePolicies"
+      ],
+      "Resource": "arn:aws:iam::ACCOUNT_ID:role/STACK_NAME-s3batchrole*"
+    },
+    {
+      "Sid": "StackUser",
+      "Effect": "Allow",
+      "Action": [
+        "iam:CreateUser", "iam:DeleteUser", "iam:GetUser",
+        "iam:TagUser", "iam:UntagUser",
+        "iam:PutUserPolicy", "iam:DeleteUserPolicy", "iam:GetUserPolicy",
+        "iam:ListUserPolicies",
+        "iam:AttachUserPolicy", "iam:DetachUserPolicy",
+        "iam:ListAttachedUserPolicies"
+      ],
+      "Resource": "arn:aws:iam::ACCOUNT_ID:user/STACK_NAME-user*"
+    },
+    {
+      "Sid": "StackUserPolicy",
+      "Effect": "Allow",
+      "Action": [
+        "iam:CreatePolicy", "iam:DeletePolicy", "iam:GetPolicy",
+        "iam:ListPolicyVersions", "iam:GetPolicyVersion",
+        "iam:CreatePolicyVersion", "iam:DeletePolicyVersion",
+        "iam:TagPolicy", "iam:UntagPolicy"
+      ],
+      "Resource": "arn:aws:iam::ACCOUNT_ID:policy/STACK_NAME-*"
+    },
+    {
+      "Sid": "ReadOnlyDiscovery",
+      "Effect": "Allow",
+      "Action": [
+        "sqs:ListQueues", "s3:ListAllMyBuckets",
+        "iam:ListPolicies", "iam:ListRoles", "iam:ListUsers"
+      ],
+      "Resource": "*"
+    }
+  ]
+}
+```
+
+Apply it with the AWS CLI (run as an admin; replace `ACCOUNT_ID`, `REGION`,
+and `STACK_NAME` — default `rustic-cold-backups`):
+
+```bash
+aws iam create-policy \
+  --policy-name GlacierVaultCfnExecScoped \
+  --policy-document file://cfn-exec-scoped.json
+
+aws iam detach-role-policy \
+  --role-name cdk-hnb659fds-cfn-exec-role-ACCOUNT_ID-REGION \
+  --policy-arn arn:aws:iam::aws:policy/AdministratorAccess
+
+aws iam attach-role-policy \
+  --role-name cdk-hnb659fds-cfn-exec-role-ACCOUNT_ID-REGION \
+  --policy-arn arn:aws:iam::ACCOUNT_ID:policy/GlacierVaultCfnExecScoped
+```
+
+For a fresh account you can skip the swap entirely: pass the policy to
+bootstrap instead, and the role never gets `AdministratorAccess` in the first
+place:
+
+```bash
+cdk bootstrap --cloudformation-execution-policies \
+  arn:aws:iam::ACCOUNT_ID:policy/GlacierVaultCfnExecScoped
+```
+
+Caveats, stated plainly:
+
+- **This policy matches the stack as it exists today.** If upstream
+  `rustic-aws` adds a new resource type (say, a Lambda), the next deploy
+  fails on the missing permission — the error names the action, so add it to
+  the policy and redeploy. A no-op deploy does not validate the policy,
+  because CloudFormation only assumes the role when a changeset actually
+  executes something; the first deploy that changes a resource is the real
+  test.
+- **Re-running `cdk bootstrap` needs admin back.** Bootstrap manages the
+  CDKToolkit stack itself (assets bucket, ECR repo, SSM parameter, the CDK
+  roles), which this policy does not cover. Temporarily re-attach
+  `AdministratorAccess`, bootstrap, then swap the scoped policy back in.
+- **Why this matters even though the role is only assumable by
+  CloudFormation:** anyone holding the setup credential can assume the CDK
+  deploy role and deploy an arbitrary template, so `AdministratorAccess` on
+  cfn-exec turns a stolen setup credential into full admin. Scoping the role
+  closes that path for everything outside the stack's own resources. It does
+  not replace deleting the setup user after setup — do both.
+
 ## 2. Deploy the container
 
 ```yaml
