@@ -27,17 +27,37 @@ func CfnExecPolicyArn(accountID string) string {
 	return fmt.Sprintf("arn:aws:iam::%s:policy/%s", accountID, CfnExecPolicyName)
 }
 
+// cfnExecResourcePrefix returns the resource-name prefix used to scope the
+// execution role's permissions. CDK generates physical names from the stack
+// name and truncates them to fit service limits (S3: 63 chars, IAM: 64
+// chars); observed truncation drops the final character of the stack name
+// ("rustic-cold-backups-scoped" becomes "rustic-cold-backups-scope-...").
+// The resource patterns therefore use this prefix bare, with no separator
+// after it ("<prefix>*" rather than "<prefix>-*"): the bare form matches
+// both the truncated name ("scope-...") and the untruncated one
+// ("scoped-...", since "scoped" starts with "scope"), while a pattern with
+// a literal hyphen after the prefix would match only the truncated form.
+func cfnExecResourcePrefix(stackName string) string {
+	if len(stackName) == 0 {
+		return stackName
+	}
+	return stackName[:len(stackName)-1]
+}
+
 // CfnExecPolicyDocument returns the IAM policy document scoping the
 // CloudFormation execution role to exactly what the stack creates. The stack
-// (upstream rustic-rs/rustic-aws, glacier-cold-storage-cdk) creates only:
-// 4 S3 buckets, 1 SQS queue + notification, 1 batch role, 1 user + policy.
-// No Lambda, no KMS keys, no nested stacks, no custom resources — and
-// CloudFront is provisioned by the app itself, not by this stack, so the role
-// needs no CloudFront permissions at all.
+// (upstream rustic-rs/rustic-aws, glacier-cold-storage-cdk) creates:
+// 4 S3 buckets, 1 SQS queue + notification, 1 batch role, 1 user + policy,
+// plus the Lambda function and execution role CDK uses to configure the S3
+// bucket notification (BucketNotificationsHandler). No KMS keys, no nested
+// stacks, and no other custom resources besides that notification handler —
+// and CloudFront is provisioned by the app itself, not by this stack, so the
+// role needs no CloudFront permissions at all.
 //
 // The only Resource: "*" is the read-only discovery statement: those five
 // list actions do not support resource-level permissions.
 func CfnExecPolicyDocument(accountID, region, stackName string) string {
+	prefix := cfnExecResourcePrefix(stackName)
 	doc := map[string]interface{}{
 		"Version": "2012-10-17",
 		"Statement": []map[string]interface{}{
@@ -57,7 +77,7 @@ func CfnExecPolicyDocument(accountID, region, stackName string) string {
 					"s3:GetBucketTagging", "s3:PutBucketTagging",
 					"s3:GetBucketAcl", "s3:PutBucketAcl",
 				},
-				"Resource": fmt.Sprintf("arn:aws:s3:::%s-*", stackName),
+				"Resource": fmt.Sprintf("arn:aws:s3:::%s*", prefix),
 			},
 			{
 				"Sid":    "StackQueue",
@@ -67,7 +87,7 @@ func CfnExecPolicyDocument(accountID, region, stackName string) string {
 					"sqs:GetQueueAttributes", "sqs:SetQueueAttributes", "sqs:GetQueueUrl",
 					"sqs:TagQueue", "sqs:UntagQueue", "sqs:ListQueueTags",
 				},
-				"Resource": fmt.Sprintf("arn:aws:sqs:%s:%s:%s-*", region, accountID, stackName),
+				"Resource": fmt.Sprintf("arn:aws:sqs:%s:%s:%s*", region, accountID, prefix),
 			},
 			{
 				"Sid":    "StackBatchRole",
@@ -76,9 +96,10 @@ func CfnExecPolicyDocument(accountID, region, stackName string) string {
 					"iam:CreateRole", "iam:DeleteRole", "iam:GetRole",
 					"iam:TagRole", "iam:UntagRole", "iam:UpdateAssumeRolePolicy",
 					"iam:PutRolePolicy", "iam:DeleteRolePolicy", "iam:GetRolePolicy",
-					"iam:ListRolePolicies",
+					"iam:ListRolePolicies", "iam:ListAttachedRolePolicies",
+					"iam:DetachRolePolicy",
 				},
-				"Resource": fmt.Sprintf("arn:aws:iam::%s:role/%s-s3batchrole*", accountID, stackName),
+				"Resource": fmt.Sprintf("arn:aws:iam::%s:role/%s*", accountID, prefix),
 			},
 			{
 				"Sid":    "StackUser",
@@ -90,8 +111,11 @@ func CfnExecPolicyDocument(accountID, region, stackName string) string {
 					"iam:ListUserPolicies",
 					"iam:AttachUserPolicy", "iam:DetachUserPolicy",
 					"iam:ListAttachedUserPolicies",
+					// CloudFormation lists (and deletes) access keys before
+					// deleting the user during rollback.
+					"iam:ListAccessKeys", "iam:DeleteAccessKey",
 				},
-				"Resource": fmt.Sprintf("arn:aws:iam::%s:user/%s-user*", accountID, stackName),
+				"Resource": fmt.Sprintf("arn:aws:iam::%s:user/%s*", accountID, prefix),
 			},
 			{
 				"Sid":    "StackUserPolicy",
@@ -102,7 +126,71 @@ func CfnExecPolicyDocument(accountID, region, stackName string) string {
 					"iam:CreatePolicyVersion", "iam:DeletePolicyVersion",
 					"iam:TagPolicy", "iam:UntagPolicy",
 				},
-				"Resource": fmt.Sprintf("arn:aws:iam::%s:policy/%s-*", accountID, stackName),
+				"Resource": fmt.Sprintf("arn:aws:iam::%s:policy/%s*", accountID, prefix),
+			},
+			{
+				// CDK implements S3 bucket notifications with a Lambda-backed
+				// custom resource (BucketNotificationsHandler) and its
+				// execution role. Both the stack-name part and the logical
+				// part of the name are truncated ("BucketNotificationsHandle"),
+				// so the pattern uses the truncated "Handle" form — it
+				// matches the full "Handler" form too — with a wildcard
+				// between the stack prefix and the handler name so both the
+				// truncated ("scope-...") and untruncated ("scoped-...")
+				// stack forms match.
+				"Sid":    "NotificationsHandlerRole",
+				"Effect": "Allow",
+				"Action": []string{
+					"iam:CreateRole", "iam:DeleteRole", "iam:GetRole",
+					"iam:TagRole", "iam:UntagRole", "iam:UpdateAssumeRolePolicy",
+					"iam:PutRolePolicy", "iam:DeleteRolePolicy", "iam:GetRolePolicy",
+					"iam:ListRolePolicies", "iam:ListAttachedRolePolicies",
+					// CloudFormation detaches attached policies before
+					// deleting the role during rollback.
+					"iam:DetachRolePolicy",
+				},
+				"Resource": fmt.Sprintf("arn:aws:iam::%s:role/%s*BucketNotificationsHandle*", accountID, prefix),
+			},
+			{
+				// PassRole is a separate statement: its PassedToService
+				// condition would deny the other role actions if it were
+				// on the same statement (the key is absent from their
+				// request context). Used when CloudFormation creates the
+				// handler function with this role.
+				"Sid":      "NotificationsHandlerRolePass",
+				"Effect":   "Allow",
+				"Action":   []string{"iam:PassRole"},
+				"Resource": fmt.Sprintf("arn:aws:iam::%s:role/%s*BucketNotificationsHandle*", accountID, prefix),
+				"Condition": map[string]interface{}{
+					"StringEquals": map[string]string{
+						"iam:PassedToService": "lambda.amazonaws.com",
+					},
+				},
+			},
+			{
+				"Sid":      "NotificationsHandlerRolePolicy",
+				"Effect":   "Allow",
+				"Action":   []string{"iam:AttachRolePolicy"},
+				"Resource": fmt.Sprintf("arn:aws:iam::%s:role/%s*BucketNotificationsHandle*", accountID, prefix),
+				"Condition": map[string]interface{}{
+					"ArnEquals": map[string]string{
+						"iam:PolicyARN": "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole",
+					},
+				},
+			},
+			{
+				"Sid":    "NotificationsHandlerFunction",
+				"Effect": "Allow",
+				"Action": []string{
+					"lambda:CreateFunction", "lambda:DeleteFunction",
+					"lambda:GetFunction", "lambda:GetFunctionConfiguration",
+					"lambda:UpdateFunctionCode", "lambda:UpdateFunctionConfiguration",
+					"lambda:TagResource", "lambda:UntagResource", "lambda:ListTags",
+					// CloudFormation invokes the function as a custom
+					// resource provider.
+					"lambda:InvokeFunction",
+				},
+				"Resource": fmt.Sprintf("arn:aws:lambda:%s:%s:function/%s*BucketNotificationsHandle*", region, accountID, prefix),
 			},
 			{
 				// CDK adds a BootstrapVersion parameter to every stack,

@@ -227,10 +227,24 @@ only:
   bucket (`OBJECT_RESTORE_COMPLETED`)
 - 1 IAM role: `STACK_NAME-s3batchrole*` (assumed by S3 Batch operations)
 - 1 IAM user: `STACK_NAME-user*` with one managed policy
+- 1 Lambda function + execution role: `BucketNotificationsHandler`, the
+  custom resource CDK uses to configure the S3 bucket notification
 
-No Lambda, no KMS keys, no nested stacks, no custom resources — and
-CloudFront is provisioned by the app itself, not by this stack, so the role
-needs no CloudFront permissions at all.
+No KMS keys, no nested stacks, and no other custom resources besides that
+notification handler — and CloudFront is provisioned by the app itself, not
+by this stack, so the role needs no CloudFront permissions at all.
+
+One catch: CDK generates physical names from the stack name and truncates
+them to fit service limits (S3: 63 chars, IAM: 64 chars). For a stack named
+`rustic-cold-backups-scoped`, the long bucket names come out as
+`rustic-cold-backups-scope-batchmanifestsbucket...` — the final `d` is cut —
+and the handler role as `rustic-cold-backups-scope-BucketNotificationsHandle...`.
+The patterns below therefore use `STACK_PREFIX`, the stack name minus its
+final character, bare with no separator after it (`STACK_PREFIX*` rather
+than `STACK_PREFIX-*`): the bare form matches both the truncated name
+(`scope-...`) and the untruncated one (`scoped-...`, since "scoped" starts
+with "scope"), while a pattern with a literal hyphen after the prefix would
+match only the truncated form.
 
 Create this as a customer managed policy, then swap it in for
 `AdministratorAccess` on the cfn-exec role:
@@ -255,7 +269,7 @@ Create this as a customer managed policy, then swap it in for
         "s3:GetBucketTagging", "s3:PutBucketTagging",
         "s3:GetBucketAcl", "s3:PutBucketAcl"
       ],
-      "Resource": "arn:aws:s3:::STACK_NAME-*"
+      "Resource": "arn:aws:s3:::STACK_PREFIX*"
     },
     {
       "Sid": "StackQueue",
@@ -265,7 +279,7 @@ Create this as a customer managed policy, then swap it in for
         "sqs:GetQueueAttributes", "sqs:SetQueueAttributes", "sqs:GetQueueUrl",
         "sqs:TagQueue", "sqs:UntagQueue", "sqs:ListQueueTags"
       ],
-      "Resource": "arn:aws:sqs:REGION:ACCOUNT_ID:STACK_NAME-*"
+      "Resource": "arn:aws:sqs:REGION:ACCOUNT_ID:STACK_PREFIX*"
     },
     {
       "Sid": "StackBatchRole",
@@ -274,9 +288,10 @@ Create this as a customer managed policy, then swap it in for
         "iam:CreateRole", "iam:DeleteRole", "iam:GetRole",
         "iam:TagRole", "iam:UntagRole", "iam:UpdateAssumeRolePolicy",
         "iam:PutRolePolicy", "iam:DeleteRolePolicy", "iam:GetRolePolicy",
-        "iam:ListRolePolicies"
+        "iam:ListRolePolicies", "iam:ListAttachedRolePolicies",
+        "iam:DetachRolePolicy"
       ],
-      "Resource": "arn:aws:iam::ACCOUNT_ID:role/STACK_NAME-s3batchrole*"
+      "Resource": "arn:aws:iam::ACCOUNT_ID:role/STACK_PREFIX*"
     },
     {
       "Sid": "StackUser",
@@ -287,9 +302,10 @@ Create this as a customer managed policy, then swap it in for
         "iam:PutUserPolicy", "iam:DeleteUserPolicy", "iam:GetUserPolicy",
         "iam:ListUserPolicies",
         "iam:AttachUserPolicy", "iam:DetachUserPolicy",
-        "iam:ListAttachedUserPolicies"
+        "iam:ListAttachedUserPolicies",
+        "iam:ListAccessKeys", "iam:DeleteAccessKey"
       ],
-      "Resource": "arn:aws:iam::ACCOUNT_ID:user/STACK_NAME-user*"
+      "Resource": "arn:aws:iam::ACCOUNT_ID:user/STACK_PREFIX*"
     },
     {
       "Sid": "StackUserPolicy",
@@ -300,7 +316,45 @@ Create this as a customer managed policy, then swap it in for
         "iam:CreatePolicyVersion", "iam:DeletePolicyVersion",
         "iam:TagPolicy", "iam:UntagPolicy"
       ],
-      "Resource": "arn:aws:iam::ACCOUNT_ID:policy/STACK_NAME-*"
+      "Resource": "arn:aws:iam::ACCOUNT_ID:policy/STACK_PREFIX*"
+    },
+    {
+      "Sid": "NotificationsHandlerRole",
+      "Effect": "Allow",
+      "Action": [
+        "iam:CreateRole", "iam:DeleteRole", "iam:GetRole",
+        "iam:TagRole", "iam:UntagRole", "iam:UpdateAssumeRolePolicy",
+        "iam:PutRolePolicy", "iam:DeleteRolePolicy", "iam:GetRolePolicy",
+        "iam:ListRolePolicies", "iam:ListAttachedRolePolicies",
+        "iam:DetachRolePolicy"
+      ],
+      "Resource": "arn:aws:iam::ACCOUNT_ID:role/STACK_PREFIX*BucketNotificationsHandle*"
+    },
+    {
+      "Sid": "NotificationsHandlerRolePass",
+      "Effect": "Allow",
+      "Action": ["iam:PassRole"],
+      "Resource": "arn:aws:iam::ACCOUNT_ID:role/STACK_PREFIX*BucketNotificationsHandle*",
+      "Condition": {"StringEquals": {"iam:PassedToService": "lambda.amazonaws.com"}}
+    },
+    {
+      "Sid": "NotificationsHandlerRolePolicy",
+      "Effect": "Allow",
+      "Action": ["iam:AttachRolePolicy"],
+      "Resource": "arn:aws:iam::ACCOUNT_ID:role/STACK_PREFIX*BucketNotificationsHandle*",
+      "Condition": {"ArnEquals": {"iam:PolicyARN": "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"}}
+    },
+    {
+      "Sid": "NotificationsHandlerFunction",
+      "Effect": "Allow",
+      "Action": [
+        "lambda:CreateFunction", "lambda:DeleteFunction",
+        "lambda:GetFunction", "lambda:GetFunctionConfiguration",
+        "lambda:UpdateFunctionCode", "lambda:UpdateFunctionConfiguration",
+        "lambda:TagResource", "lambda:UntagResource", "lambda:ListTags",
+        "lambda:InvokeFunction"
+      ],
+      "Resource": "arn:aws:lambda:REGION:ACCOUNT_ID:function/STACK_PREFIX*BucketNotificationsHandle*"
     },
     {
       "Sid": "BootstrapVersionParameter",

@@ -9,10 +9,11 @@ import (
 type cfnExecPolicyDoc struct {
 	Version   string `json:"Version"`
 	Statement []struct {
-		Sid      string   `json:"Sid"`
-		Effect   string   `json:"Effect"`
-		Action   []string `json:"Action"`
-		Resource string   `json:"Resource"`
+		Sid       string                       `json:"Sid"`
+		Effect    string                       `json:"Effect"`
+		Action    []string                     `json:"Action"`
+		Resource  string                       `json:"Resource"`
+		Condition map[string]map[string]string `json:"Condition"`
 	} `json:"Statement"`
 }
 
@@ -31,11 +32,11 @@ func TestCfnExecPolicyDocument(t *testing.T) {
 	if parsed.Version != "2012-10-17" {
 		t.Errorf("unexpected version %q", parsed.Version)
 	}
-	if len(parsed.Statement) != 7 {
-		t.Fatalf("expected 7 statements, got %d", len(parsed.Statement))
+	if len(parsed.Statement) != 11 {
+		t.Fatalf("expected 11 statements, got %d", len(parsed.Statement))
 	}
 
-	wantSids := []string{"StackBuckets", "StackQueue", "StackBatchRole", "StackUser", "StackUserPolicy", "BootstrapVersionParameter", "ReadOnlyDiscovery"}
+	wantSids := []string{"StackBuckets", "StackQueue", "StackBatchRole", "StackUser", "StackUserPolicy", "NotificationsHandlerRole", "NotificationsHandlerRolePass", "NotificationsHandlerRolePolicy", "NotificationsHandlerFunction", "BootstrapVersionParameter", "ReadOnlyDiscovery"}
 	for i, want := range wantSids {
 		if parsed.Statement[i].Sid != want {
 			t.Errorf("statement %d: Sid = %q, want %q", i, parsed.Statement[i].Sid, want)
@@ -52,12 +53,23 @@ func TestCfnExecPolicyDocument(t *testing.T) {
 func TestCfnExecPolicyDocumentResources(t *testing.T) {
 	parsed := parseCfnExecDoc(t, "788142818300", "us-east-1", "rustic-cold-backups-scoped")
 
+	// Resource patterns use the stack name minus its last character, bare
+	// with no separator after it, so they match both truncated physical
+	// names ("rustic-cold-backups-scope-...") and untruncated ones
+	// ("rustic-cold-backups-scoped-...").
 	wantResources := map[string]string{
-		"StackBuckets":    "arn:aws:s3:::rustic-cold-backups-scoped-*",
-		"StackQueue":      "arn:aws:sqs:us-east-1:788142818300:rustic-cold-backups-scoped-*",
-		"StackBatchRole":  "arn:aws:iam::788142818300:role/rustic-cold-backups-scoped-s3batchrole*",
-		"StackUser":       "arn:aws:iam::788142818300:user/rustic-cold-backups-scoped-user*",
-		"StackUserPolicy": "arn:aws:iam::788142818300:policy/rustic-cold-backups-scoped-*",
+		"StackBuckets":    "arn:aws:s3:::rustic-cold-backups-scope*",
+		"StackQueue":      "arn:aws:sqs:us-east-1:788142818300:rustic-cold-backups-scope*",
+		"StackBatchRole":  "arn:aws:iam::788142818300:role/rustic-cold-backups-scope*",
+		"StackUser":       "arn:aws:iam::788142818300:user/rustic-cold-backups-scope*",
+		"StackUserPolicy": "arn:aws:iam::788142818300:policy/rustic-cold-backups-scope*",
+		// The handler role/function names are truncated in both the stack
+		// part and the logical part, so the pattern carries a wildcard
+		// between the prefix and the handler name.
+		"NotificationsHandlerRole":       "arn:aws:iam::788142818300:role/rustic-cold-backups-scope*BucketNotificationsHandle*",
+		"NotificationsHandlerRolePass":   "arn:aws:iam::788142818300:role/rustic-cold-backups-scope*BucketNotificationsHandle*",
+		"NotificationsHandlerRolePolicy": "arn:aws:iam::788142818300:role/rustic-cold-backups-scope*BucketNotificationsHandle*",
+		"NotificationsHandlerFunction":   "arn:aws:lambda:us-east-1:788142818300:function/rustic-cold-backups-scope*BucketNotificationsHandle*",
 		// CDK resolves every stack's BootstrapVersion parameter from SSM at
 		// deploy time using the execution role; without this, changeset
 		// creation fails with AccessDenied on ssm:GetParameters.
@@ -128,15 +140,16 @@ func TestCfnExecPolicyDocumentSubstitutesInputs(t *testing.T) {
 			t.Errorf("statement %s: Resource %q missing account ID", st.Sid, st.Resource)
 		}
 		// The bootstrap version parameter is shared across stacks, so it
-		// carries no stack name — everything else must carry it.
+		// carries no stack name — everything else must carry the
+		// truncated prefix (stack name minus its last character).
 		if st.Sid == "BootstrapVersionParameter" {
 			continue
 		}
-		if !strings.Contains(st.Resource, "my-stack") {
-			t.Errorf("statement %s: Resource %q missing stack name", st.Sid, st.Resource)
+		if !strings.Contains(st.Resource, "my-stac") {
+			t.Errorf("statement %s: Resource %q missing stack name prefix", st.Sid, st.Resource)
 		}
 	}
-	if got := parsed.Statement[1].Resource; got != "arn:aws:sqs:eu-west-1:111122223333:my-stack-*" {
+	if got := parsed.Statement[1].Resource; got != "arn:aws:sqs:eu-west-1:111122223333:my-stac*" {
 		t.Errorf("StackQueue Resource = %q", got)
 	}
 }
@@ -211,6 +224,211 @@ func TestPolicyDocumentsEqual(t *testing.T) {
 	// Invalid JSON must error, not silently compare unequal.
 	if _, err := policyDocumentsEqual(a, "{not json"); err == nil {
 		t.Errorf("expected error for invalid JSON, got nil")
+	}
+}
+
+func TestCfnExecResourcePrefix(t *testing.T) {
+	if got := cfnExecResourcePrefix("rustic-cold-backups-scoped"); got != "rustic-cold-backups-scope" {
+		t.Errorf("cfnExecResourcePrefix = %q", got)
+	}
+	if got := cfnExecResourcePrefix(""); got != "" {
+		t.Errorf("cfnExecResourcePrefix(\"\") = %q", got)
+	}
+	if got := cfnExecResourcePrefix("a"); got != "" {
+		t.Errorf("cfnExecResourcePrefix(\"a\") = %q", got)
+	}
+}
+
+// globMatch reports whether value matches an IAM-style pattern where "*"
+// matches any (possibly empty) sequence.
+func globMatch(pattern, value string) bool {
+	parts := strings.Split(pattern, "*")
+	if len(parts) == 1 {
+		return pattern == value
+	}
+	if !strings.HasPrefix(value, parts[0]) {
+		return false
+	}
+	rest := value[len(parts[0]):]
+	for _, p := range parts[1 : len(parts)-1] {
+		i := strings.Index(rest, p)
+		if i < 0 {
+			return false
+		}
+		rest = rest[i+len(p):]
+	}
+	if last := parts[len(parts)-1]; last != "" {
+		return strings.HasSuffix(rest, last)
+	}
+	return true
+}
+
+func TestCfnExecPolicyMatchesObservedNames(t *testing.T) {
+	// Regression test for the 2026-11-14 deploy failure: CDK truncates
+	// physical names to fit service limits, so the batch buckets came out
+	// as "rustic-cold-backups-scope-..." and the policy's
+	// "rustic-cold-backups-scoped-*" pattern did not match them. The
+	// truncated names below are copied from the deploy log; the
+	// untruncated ones are the forms the other resources take.
+	parsed := parseCfnExecDoc(t, "788142818300", "us-east-1", "rustic-cold-backups-scoped")
+	bySid := map[string]string{}
+	for _, st := range parsed.Statement {
+		bySid[st.Sid] = st.Resource
+	}
+	cases := map[string][]string{
+		"StackBuckets": {
+			// Truncated names, from the log (CreateBucket denied on these).
+			"arn:aws:s3:::rustic-cold-backups-scope-batchmanifestsbucket86c3-xp8fyxtbdydf",
+			"arn:aws:s3:::rustic-cold-backups-scope-batchreportsbucket05a6b2-tefsci874q3f",
+			// Untruncated form, as the hot/cold buckets take it.
+			"arn:aws:s3:::rustic-cold-backups-scoped-hotbucketbee04f5d-abcdefghijkl",
+		},
+		"StackQueue": {
+			"arn:aws:sqs:us-east-1:788142818300:rustic-cold-backups-scoped-coldeventsqueuec027cf68-abcdefgh",
+		},
+		"StackBatchRole": {
+			"arn:aws:iam::788142818300:role/rustic-cold-backups-scoped-s3batchrole-abcdefgh",
+		},
+		"StackUser": {
+			// From the log (rollback failed deleting this user).
+			"arn:aws:iam::788142818300:user/rustic-cold-backups-scoped-user2C2B57AE-xIVQSgyirLpY",
+		},
+		"StackUserPolicy": {
+			"arn:aws:iam::788142818300:policy/rustic-cold-backups-scoped-userpolicy-abcdefgh",
+		},
+		"NotificationsHandlerRole": {
+			// From the log (CreateRole denied on this role).
+			"arn:aws:iam::788142818300:role/rustic-cold-backups-scope-BucketNotificationsHandle-XAnYzOrQPjAt",
+			// Untruncated form, in case a shorter stack name leaves it whole.
+			"arn:aws:iam::788142818300:role/rustic-cold-backups-scoped-BucketNotificationsHandler-abcdefgh",
+		},
+		"NotificationsHandlerFunction": {
+			// Expected form of the function name (the deploy never got far
+			// enough to create it, so this one is inferred, not observed).
+			"arn:aws:lambda:us-east-1:788142818300:function/rustic-cold-backups-scope-BucketNotificationsHandle-XAnYzOrQPjAt",
+		},
+	}
+	for sid, names := range cases {
+		pattern, ok := bySid[sid]
+		if !ok {
+			t.Errorf("missing statement %q", sid)
+			continue
+		}
+		for _, name := range names {
+			if !globMatch(pattern, name) {
+				t.Errorf("statement %s: pattern %q does not match %q", sid, pattern, name)
+			}
+		}
+	}
+	// And the patterns must not match unrelated resources.
+	if globMatch(bySid["StackBuckets"], "arn:aws:s3:::some-other-bucket") {
+		t.Errorf("StackBuckets pattern matches an unrelated bucket")
+	}
+	if globMatch(bySid["StackUser"], "arn:aws:iam::788142818300:user/someone-else") {
+		t.Errorf("StackUser pattern matches an unrelated user")
+	}
+}
+
+func TestCfnExecPolicyRollbackPermissions(t *testing.T) {
+	// Regression test for the 2026-11-14 rollback failure: deleting the
+	// user needs iam:ListAccessKeys, deleting the roles needs
+	// iam:DetachRolePolicy.
+	parsed := parseCfnExecDoc(t, "788142818300", "us-east-1", "rustic-cold-backups-scoped")
+	want := map[string][]string{
+		"StackUser":                {"iam:ListAccessKeys", "iam:DeleteAccessKey"},
+		"StackBatchRole":           {"iam:DetachRolePolicy", "iam:ListAttachedRolePolicies"},
+		"NotificationsHandlerRole": {"iam:DetachRolePolicy", "iam:ListAttachedRolePolicies"},
+	}
+	for _, st := range parsed.Statement {
+		actions, ok := want[st.Sid]
+		if !ok {
+			continue
+		}
+		have := map[string]bool{}
+		for _, a := range st.Action {
+			have[a] = true
+		}
+		for _, a := range actions {
+			if !have[a] {
+				t.Errorf("statement %s: missing rollback action %q", st.Sid, a)
+			}
+		}
+	}
+	for sid := range want {
+		found := false
+		for _, st := range parsed.Statement {
+			if st.Sid == sid {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("missing statement %q", sid)
+		}
+	}
+}
+
+func TestCfnExecPolicyHandlerConditions(t *testing.T) {
+	// PassRole and AttachRolePolicy carry conditions that would deny the
+	// other role actions if they shared a statement (the condition keys
+	// are absent from those requests' context), so each lives in its own
+	// statement with its own condition.
+	parsed := parseCfnExecDoc(t, "788142818300", "us-east-1", "rustic-cold-backups-scoped")
+	bySid := map[string]struct {
+		Actions   []string
+		Condition map[string]map[string]string
+	}{}
+	for _, st := range parsed.Statement {
+		bySid[st.Sid] = struct {
+			Actions   []string
+			Condition map[string]map[string]string
+		}{st.Action, st.Condition}
+	}
+	role, ok := bySid["NotificationsHandlerRole"]
+	if !ok {
+		t.Fatal("missing NotificationsHandlerRole statement")
+	}
+	if len(role.Condition) != 0 {
+		t.Errorf("NotificationsHandlerRole must carry no condition, got %v", role.Condition)
+	}
+	for _, a := range role.Actions {
+		if a == "iam:PassRole" || a == "iam:AttachRolePolicy" {
+			t.Errorf("NotificationsHandlerRole must not contain %q (it has its own conditioned statement)", a)
+		}
+	}
+	pass, ok := bySid["NotificationsHandlerRolePass"]
+	if !ok {
+		t.Fatal("missing NotificationsHandlerRolePass statement")
+	}
+	if len(pass.Actions) != 1 || pass.Actions[0] != "iam:PassRole" {
+		t.Errorf("NotificationsHandlerRolePass actions = %v, want only iam:PassRole", pass.Actions)
+	}
+	if pass.Condition["StringEquals"]["iam:PassedToService"] != "lambda.amazonaws.com" {
+		t.Errorf("NotificationsHandlerRolePass condition = %v", pass.Condition)
+	}
+	attach, ok := bySid["NotificationsHandlerRolePolicy"]
+	if !ok {
+		t.Fatal("missing NotificationsHandlerRolePolicy statement")
+	}
+	if len(attach.Actions) != 1 || attach.Actions[0] != "iam:AttachRolePolicy" {
+		t.Errorf("NotificationsHandlerRolePolicy actions = %v, want only iam:AttachRolePolicy", attach.Actions)
+	}
+	if attach.Condition["ArnEquals"]["iam:PolicyARN"] != "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole" {
+		t.Errorf("NotificationsHandlerRolePolicy condition = %v", attach.Condition)
+	}
+	fn, ok := bySid["NotificationsHandlerFunction"]
+	if !ok {
+		t.Fatal("missing NotificationsHandlerFunction statement")
+	}
+	for _, want := range []string{"lambda:CreateFunction", "lambda:DeleteFunction", "lambda:InvokeFunction"} {
+		found := false
+		for _, a := range fn.Actions {
+			if a == want {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("NotificationsHandlerFunction: missing action %q", want)
+		}
 	}
 }
 
