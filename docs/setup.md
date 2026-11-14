@@ -328,6 +328,30 @@ cdk bootstrap --cloudformation-execution-policies \
   arn:aws:iam::ACCOUNT_ID:policy/GlacierVaultCfnExecScoped
 ```
 
+If you take that path, the setup credential policy in step 1 needs one
+matching change: its `BootstrapExecRoleGetsOnlyThisPolicy` statement currently
+allows `iam:AttachRolePolicy` on the cfn-exec role only when the policy is
+`AdministratorAccess`. On first bootstrap there is no cfn-exec role yet, so
+CloudFormation runs with the setup credential directly — and it would try to
+attach the scoped policy, which the condition would deny. Change the
+condition to allow both ARNs during the transition, then drop
+`AdministratorAccess` from it once the swap is done:
+
+```json
+"Condition": {"ArnEquals": {"iam:PolicyARN": [
+  "arn:aws:iam::aws:policy/AdministratorAccess",
+  "arn:aws:iam::ACCOUNT_ID:policy/GlacierVaultCfnExecScoped"
+]}}
+```
+
+That statement is the single point where the two policies connect: the setup
+policy decides *which* policy may be attached to the cfn-exec role, and the
+cfn-exec policy decides what the role may do once attached. If you do the
+swap with admin credentials after bootstrap (the CLI commands above), the
+setup policy needs no change at all — but update the condition anyway, or a
+future `cdk bootstrap` run with the setup credential would try to put
+`AdministratorAccess` back.
+
 Caveats, stated plainly:
 
 - **This policy matches the stack as it exists today.** If upstream
