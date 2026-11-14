@@ -57,6 +57,7 @@ func (s *Server) Router() http.Handler {
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.RealIP)
+	r.Use(securityHeaders)
 
 	// Public routes.
 	r.Post("/api/auth/login", s.handleLogin)

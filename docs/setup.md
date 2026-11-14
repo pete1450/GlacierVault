@@ -24,47 +24,21 @@ In the AWS Console:
 2. On the permissions step, you have two options:
    - **Simple:** attach the AWS-managed `AdministratorAccess` policy. Easiest,
      and safe enough for a credential you will use once and can delete after
-     setup completes.
-   - **Scoped:** attach a custom policy with roughly these permissions
-     (CDK bootstrap + deploy needs all of them):
+     setup completes. 
+   - **Scoped:** attach a custom policy. CDK bootstrap + deploy + the app's
+     CloudFront provisioning need the permissions below — no `service:*`
+     wildcards, and resources scoped wherever AWS allows it. Replace
+     `ACCOUNT_ID` with your AWS account ID, `REGION` with your region, and
+     `STACK_PREFIX` with the first 20 characters of the stack name (for a
+     stack named `rustic-cold-backups-scoped`, that's `rustic-cold-backups-`).
+     One credential covers every stack name in the same family, so renaming
+     the stack to another name sharing that prefix needs no policy update.
 
-     ```json
-     {
-       "Version": "2012-10-17",
-       "Statement": [{
-         "Effect": "Allow",
-         "Action": [
-           "cloudformation:*",
-           "iam:*",
-           "s3:*",
-           "sqs:*",
-           "cloudfront:*",
-           "sts:GetCallerIdentity",
-           "ecr:*",
-           "ssm:PutParameter",
-           "ssm:GetParameter"
-         ],
-         "Resource": "*"
-       }]
-     }
-     ```
+     The policy is available as a standalone file,
+     [`docs/setup-credential-policy.json`](setup-credential-policy.json) —
+     copy it and replace the placeholders, or use it as-is after replacing
+     them, rather than copying from this page.
 
-     > In practice CDK touches IAM, S3, SQS, and CloudFormation. The `ecr:*`
-     > entry covers CDK asset publishing if your bootstrap uses it; omit it
-     > if your bootstrap is already in place. `cloudfront:*` is needed for
-     > the free-egress distribution the app provisions after the CDK deploy.
-     > `ssm:PutParameter` / `ssm:GetParameter` are for the `/cdk-bootstrap/…`
-     > version key that `cdk bootstrap` writes — without them bootstrap fails.
-     >
-     > Be honest with yourself about what this policy means: `iam:*` lets the
-     > holder create roles and attach `AdministratorAccess` to them (CDK
-     > bootstrap itself does exactly that for its deploy role), so a
-     > determined holder of these credentials can reach full admin regardless
-     > of how you scope the rest. The scoped policy limits accidental blast
-     > radius; the real protection is using the credential once and deleting
-     > the user (or at least its access key) right after setup — see below.
-     > `Resource: "*"` is the practical minimum because CDK generates bucket,
-     > role, and policy names at deploy time.
 3. Finish user creation, then open the user → **Security credentials →
    Create access key** → use case "Command Line Interface (CLI)". Copy the
    **Access key ID** and **Secret access key** — the secret is shown once.
