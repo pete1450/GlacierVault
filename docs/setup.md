@@ -25,46 +25,181 @@ In the AWS Console:
    - **Simple:** attach the AWS-managed `AdministratorAccess` policy. Easiest,
      and safe enough for a credential you will use once and can delete after
      setup completes.
-   - **Scoped:** attach a custom policy with roughly these permissions
-     (CDK bootstrap + deploy needs all of them):
+   - **Scoped:** attach a custom policy. CDK bootstrap + deploy + the app's
+     CloudFront provisioning need the permissions below — no `service:*`
+     wildcards, and resources scoped wherever AWS allows it. Replace
+     `ACCOUNT_ID` with your AWS account ID, `REGION` with your region, and
+     `STACK_NAME` with the stack name (default `rustic-cold-backups`).
+
+     The same policy is also available as a standalone file,
+     [`docs/setup-credential-policy.json`](setup-credential-policy.json) —
+     copy it and replace the placeholders, or use it as-is after replacing
+     them, rather than copying from this page.
 
      ```json
      {
        "Version": "2012-10-17",
-       "Statement": [{
-         "Effect": "Allow",
-         "Action": [
-           "cloudformation:*",
-           "iam:*",
-           "s3:*",
-           "sqs:*",
-           "cloudfront:*",
-           "sts:GetCallerIdentity",
-           "ecr:*",
-           "ssm:PutParameter",
-           "ssm:GetParameter"
-         ],
-         "Resource": "*"
-       }]
+       "Statement": [
+         {
+           "Sid": "STSIdentity",
+           "Effect": "Allow",
+           "Action": ["sts:GetCallerIdentity"],
+           "Resource": "*"
+         },
+         {
+           "Sid": "CdkBootstrapAndDeployStacks",
+           "Effect": "Allow",
+           "Action": [
+             "cloudformation:CreateStack", "cloudformation:UpdateStack", "cloudformation:DeleteStack",
+             "cloudformation:CreateChangeSet", "cloudformation:DescribeChangeSet",
+             "cloudformation:ExecuteChangeSet", "cloudformation:DeleteChangeSet",
+             "cloudformation:DescribeStacks", "cloudformation:DescribeStackEvents",
+             "cloudformation:DescribeStackResources", "cloudformation:GetTemplate",
+             "cloudformation:GetTemplateSummary"
+           ],
+           "Resource": [
+             "arn:aws:cloudformation:REGION:ACCOUNT_ID:stack/CDKToolkit/*",
+             "arn:aws:cloudformation:REGION:ACCOUNT_ID:stack/STACK_NAME/*"
+           ]
+         },
+         {
+           "Sid": "DeployThroughCdkRolesOnly",
+           "Effect": "Allow",
+           "Action": "sts:AssumeRole",
+           "Resource": [
+             "arn:aws:iam::ACCOUNT_ID:role/cdk-hnb659fds-deploy-role-ACCOUNT_ID-REGION",
+             "arn:aws:iam::ACCOUNT_ID:role/cdk-hnb659fds-file-publishing-role-ACCOUNT_ID-REGION",
+             "arn:aws:iam::ACCOUNT_ID:role/cdk-hnb659fds-lookup-role-ACCOUNT_ID-REGION"
+           ]
+         },
+         {
+           "Sid": "BootstrapCdkRoles",
+           "Effect": "Allow",
+           "Action": [
+             "iam:CreateRole", "iam:DeleteRole", "iam:GetRole", "iam:TagRole", "iam:UntagRole",
+             "iam:UpdateAssumeRolePolicy", "iam:PutRolePolicy", "iam:GetRolePolicy",
+             "iam:DeleteRolePolicy", "iam:DetachRolePolicy"
+           ],
+           "Resource": "arn:aws:iam::ACCOUNT_ID:role/cdk-hnb659fds-*"
+         },
+         {
+           "Sid": "BootstrapExecRoleGetsOnlyThisPolicy",
+           "Effect": "Allow",
+           "Action": "iam:AttachRolePolicy",
+           "Resource": "arn:aws:iam::ACCOUNT_ID:role/cdk-hnb659fds-cfn-exec-role-ACCOUNT_ID-REGION",
+           "Condition": {"ArnEquals": {"iam:PolicyARN": "arn:aws:iam::ACCOUNT_ID:policy/GlacierVaultCfnExecScoped"}}
+         },
+         {
+           "Sid": "CreateCfnExecScopedPolicy",
+           "Effect": "Allow",
+           "Action": ["iam:CreatePolicy", "iam:GetPolicy"],
+           "Resource": "arn:aws:iam::ACCOUNT_ID:policy/GlacierVaultCfnExecScoped"
+         },
+         {
+           "Sid": "BootstrapAssetsBucket",
+           "Effect": "Allow",
+           "Action": [
+             "s3:CreateBucket", "s3:DeleteBucket", "s3:GetBucketLocation",
+             "s3:GetBucketPolicy", "s3:PutBucketPolicy",
+             "s3:GetBucketVersioning", "s3:PutBucketVersioning",
+             "s3:GetBucketEncryption", "s3:PutBucketEncryption",
+             "s3:GetBucketPublicAccessBlock", "s3:PutBucketPublicAccessBlock",
+             "s3:ListBucket", "s3:GetObject", "s3:PutObject", "s3:DeleteObject"
+           ],
+           "Resource": [
+             "arn:aws:s3:::cdk-hnb659fds-assets-ACCOUNT_ID-REGION",
+             "arn:aws:s3:::cdk-hnb659fds-assets-ACCOUNT_ID-REGION/*"
+           ]
+         },
+         {
+           "Sid": "BootstrapEcrRepo",
+           "Effect": "Allow",
+           "Action": [
+             "ecr:CreateRepository", "ecr:DeleteRepository", "ecr:DescribeRepositories",
+             "ecr:BatchCheckLayerAvailability", "ecr:PutImage", "ecr:BatchGetImage",
+             "ecr:GetDownloadUrlForLayer", "ecr:ListImages",
+             "ecr:InitiateLayerUpload", "ecr:UploadLayerPart", "ecr:CompleteLayerUpload"
+           ],
+           "Resource": "arn:aws:ecr:REGION:ACCOUNT_ID:repository/cdk-hnb659fds-container-assets-ACCOUNT_ID-REGION"
+         },
+         {
+           "Sid": "EcrAuthToken",
+           "Effect": "Allow",
+           "Action": ["ecr:GetAuthorizationToken"],
+           "Resource": "*"
+         },
+         {
+           "Sid": "BootstrapVersionParameter",
+           "Effect": "Allow",
+           "Action": [
+             "ssm:PutParameter", "ssm:GetParameter", "ssm:GetParameters",
+             "ssm:DeleteParameter", "ssm:AddTagsToResource", "ssm:ListTagsForResource"
+           ],
+           "Resource": "arn:aws:ssm:REGION:ACCOUNT_ID:parameter/cdk-bootstrap/hnb659fds/version"
+         },
+         {
+           "Sid": "AppResolvesStackOutputs",
+           "Effect": "Allow",
+           "Action": "iam:GetRole",
+           "Resource": "arn:aws:iam::ACCOUNT_ID:role/STACK_NAME-s3batchrole*"
+         },
+         {
+           "Sid": "AppCreatesKeyForBackupUser",
+           "Effect": "Allow",
+           "Action": "iam:CreateAccessKey",
+           "Resource": "arn:aws:iam::ACCOUNT_ID:user/STACK_NAME-user*"
+         },
+         {
+           "Sid": "OptionalSnapshotDeleteToggle",
+           "Effect": "Allow",
+           "Action": ["iam:PutUserPolicy", "iam:DeleteUserPolicy"],
+           "Resource": "arn:aws:iam::ACCOUNT_ID:user/STACK_NAME-user*"
+         },
+         {
+           "Sid": "CloudFrontFreeEgressSetup",
+           "Effect": "Allow",
+           "Action": [
+             "cloudfront:CreateOriginAccessControl", "cloudfront:CreatePublicKey",
+             "cloudfront:CreateKeyGroup", "cloudfront:CreateCachePolicy",
+             "cloudfront:CreateDistribution", "cloudfront:TagResource",
+             "cloudfront:ListDistributions", "cloudfront:ListTagsForResource",
+             "cloudfront:GetDistribution", "cloudfront:GetDistributionConfig",
+             "cloudfront:UpdateDistribution"
+           ],
+           "Resource": "*"
+         },
+         {
+           "Sid": "LetCloudFrontReadColdBucket",
+           "Effect": "Allow",
+           "Action": ["s3:GetBucketPolicy", "s3:PutBucketPolicy"],
+           "Resource": "arn:aws:s3:::STACK_NAME-coldbucket*"
+         }
+       ]
      }
      ```
 
-     > In practice CDK touches IAM, S3, SQS, and CloudFormation. The `ecr:*`
-     > entry covers CDK asset publishing if your bootstrap uses it; omit it
-     > if your bootstrap is already in place. `cloudfront:*` is needed for
-     > the free-egress distribution the app provisions after the CDK deploy.
-     > `ssm:PutParameter` / `ssm:GetParameter` are for the `/cdk-bootstrap/…`
-     > version key that `cdk bootstrap` writes — without them bootstrap fails.
-     >
-     > Be honest with yourself about what this policy means: `iam:*` lets the
-     > holder create roles and attach `AdministratorAccess` to them (CDK
-     > bootstrap itself does exactly that for its deploy role), so a
-     > determined holder of these credentials can reach full admin regardless
-     > of how you scope the rest. The scoped policy limits accidental blast
-     > radius; the real protection is using the credential once and deleting
-     > the user (or at least its access key) right after setup — see below.
-     > `Resource: "*"` is the practical minimum because CDK generates bucket,
-     > role, and policy names at deploy time.
+     Notes on what couldn't be narrowed further:
+     - **`sts:GetCallerIdentity` and `ecr:GetAuthorizationToken`** don't
+       support resource-level permissions — `*` is the only option.
+     - **CloudFront actions** don't support resource-level permissions
+       either. Actions are enumerated instead of `cloudfront:*`, which is
+       the best AWS allows.
+     - **Stack resources are created by CloudFormation via the cfn-exec
+       role**, not by this credential — that's why there are no SQS or
+       stack-bucket statements here. The credential only needs the direct
+       calls listed above (plus `AssumeRole` so CDK can use its roles).
+     - **CDK-generated names** start with the stack name, so `STACK_NAME-*`
+       matches the stack's user, batch role, and cold bucket. If you renamed
+       the stack, update the prefix.
+     - If your bootstrap is already in place and you never use container
+       assets, the two `Ecr*` statements can be dropped.
+     - Be honest with yourself about what this policy means: CDK bootstrap
+       attaches `AdministratorAccess` to the cfn-exec role, so a determined
+       holder of these credentials can reach full admin regardless of how
+       you scope the rest. The scoped policy limits accidental blast radius;
+       the real protection is using the credential once and deleting the user
+       (or at least its access key) right after setup — see below.
+
 3. Finish user creation, then open the user → **Security credentials →
    Create access key** → use case "Command Line Interface (CLI)". Copy the
    **Access key ID** and **Secret access key** — the secret is shown once.
@@ -72,6 +207,208 @@ In the AWS Console:
 > **After setup succeeds**, you can delete this IAM user (or at least delete
 > its access key). The appliance provisions its own limited `rustic-iam-user`
 > and never needs the setup credentials again.
+
+### Scoping down the cfn-exec role (optional, recommended)
+
+`cdk bootstrap` attaches the AWS-managed `AdministratorAccess` policy to the
+`cdk-hnb659fds-cfn-exec-role-ACCOUNT_ID-REGION` role — the role CloudFormation
+assumes to create and manage stack resources. That is CDK's default, not
+something this stack needs: the stack creates a fixed, known set of resources
+and adds no new resource types, so the role can be scoped to exactly those.
+
+The stack (upstream `rustic-rs/rustic-aws`, `glacier-cold-storage-cdk`) creates
+only:
+
+- 4 S3 buckets: hot, cold, batch-manifests, batch-reports
+  (SSL-enforced, lifecycle rules, `RemovalPolicy.DESTROY`, no versioning)
+- 1 SQS queue: cold-events-queue, plus the S3 → SQS notification on the cold
+  bucket (`OBJECT_RESTORE_COMPLETED`)
+- 1 IAM role: `STACK_NAME-s3batchrole*` (assumed by S3 Batch operations)
+- 1 IAM user: `STACK_NAME-user*` with one managed policy
+
+No Lambda, no KMS keys, no nested stacks, no custom resources — and
+CloudFront is provisioned by the app itself, not by this stack, so the role
+needs no CloudFront permissions at all.
+
+Create this as a customer managed policy, then swap it in for
+`AdministratorAccess` on the cfn-exec role:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "StackBuckets",
+      "Effect": "Allow",
+      "Action": [
+        "s3:CreateBucket", "s3:DeleteBucket",
+        "s3:GetBucketLocation", "s3:ListBucket",
+        "s3:GetBucketPolicy", "s3:PutBucketPolicy", "s3:DeleteBucketPolicy",
+        "s3:GetLifecycleConfiguration", "s3:PutLifecycleConfiguration",
+        "s3:GetBucketVersioning", "s3:PutBucketVersioning",
+        "s3:GetEncryptionConfiguration", "s3:PutEncryptionConfiguration",
+        "s3:GetBucketPublicAccessBlock", "s3:PutBucketPublicAccessBlock",
+        "s3:GetBucketOwnershipControls", "s3:PutBucketOwnershipControls",
+        "s3:GetBucketNotification", "s3:PutBucketNotification",
+        "s3:GetBucketTagging", "s3:PutBucketTagging",
+        "s3:GetBucketAcl", "s3:PutBucketAcl"
+      ],
+      "Resource": "arn:aws:s3:::STACK_NAME-*"
+    },
+    {
+      "Sid": "StackQueue",
+      "Effect": "Allow",
+      "Action": [
+        "sqs:CreateQueue", "sqs:DeleteQueue",
+        "sqs:GetQueueAttributes", "sqs:SetQueueAttributes", "sqs:GetQueueUrl",
+        "sqs:TagQueue", "sqs:UntagQueue", "sqs:ListQueueTags"
+      ],
+      "Resource": "arn:aws:sqs:REGION:ACCOUNT_ID:STACK_NAME-*"
+    },
+    {
+      "Sid": "StackBatchRole",
+      "Effect": "Allow",
+      "Action": [
+        "iam:CreateRole", "iam:DeleteRole", "iam:GetRole",
+        "iam:TagRole", "iam:UntagRole", "iam:UpdateAssumeRolePolicy",
+        "iam:PutRolePolicy", "iam:DeleteRolePolicy", "iam:GetRolePolicy",
+        "iam:ListRolePolicies"
+      ],
+      "Resource": "arn:aws:iam::ACCOUNT_ID:role/STACK_NAME-s3batchrole*"
+    },
+    {
+      "Sid": "StackUser",
+      "Effect": "Allow",
+      "Action": [
+        "iam:CreateUser", "iam:DeleteUser", "iam:GetUser",
+        "iam:TagUser", "iam:UntagUser",
+        "iam:PutUserPolicy", "iam:DeleteUserPolicy", "iam:GetUserPolicy",
+        "iam:ListUserPolicies",
+        "iam:AttachUserPolicy", "iam:DetachUserPolicy",
+        "iam:ListAttachedUserPolicies"
+      ],
+      "Resource": "arn:aws:iam::ACCOUNT_ID:user/STACK_NAME-user*"
+    },
+    {
+      "Sid": "StackUserPolicy",
+      "Effect": "Allow",
+      "Action": [
+        "iam:CreatePolicy", "iam:DeletePolicy", "iam:GetPolicy",
+        "iam:ListPolicyVersions", "iam:GetPolicyVersion",
+        "iam:CreatePolicyVersion", "iam:DeletePolicyVersion",
+        "iam:TagPolicy", "iam:UntagPolicy"
+      ],
+      "Resource": "arn:aws:iam::ACCOUNT_ID:policy/STACK_NAME-*"
+    },
+    {
+      "Sid": "ReadOnlyDiscovery",
+      "Effect": "Allow",
+      "Action": [
+        "sqs:ListQueues", "s3:ListAllMyBuckets",
+        "iam:ListPolicies", "iam:ListRoles", "iam:ListUsers"
+      ],
+      "Resource": "*"
+    }
+  ]
+}
+```
+
+The setup wizard does this automatically — no manual steps. When you run
+setup from the app, it creates the `GlacierVaultCfnExecScoped` policy
+(`iam:CreatePolicy` on exactly that policy name, granted by the
+`CreateCfnExecScopedPolicy` statement in step 1) and then runs
+`cdk bootstrap --cloudformation-execution-policies <policy-arn>`, so the
+cfn-exec role never gets `AdministratorAccess`. Re-running setup is safe:
+creating the policy is idempotent, and re-bootstrapping with the flag swaps
+an existing admin attachment for the scoped policy.
+
+If you ever need to do the swap outside the wizard, the manual commands are
+(run as an admin; replace `ACCOUNT_ID`, `REGION`, and `STACK_NAME` —
+default `rustic-cold-backups`):
+
+```bash
+aws iam create-policy \
+  --policy-name GlacierVaultCfnExecScoped \
+  --policy-document file://cfn-exec-scoped.json
+
+aws iam detach-role-policy \
+  --role-name cdk-hnb659fds-cfn-exec-role-ACCOUNT_ID-REGION \
+  --policy-arn arn:aws:iam::aws:policy/AdministratorAccess
+
+aws iam attach-role-policy \
+  --role-name cdk-hnb659fds-cfn-exec-role-ACCOUNT_ID-REGION \
+  --policy-arn arn:aws:iam::ACCOUNT_ID:policy/GlacierVaultCfnExecScoped
+```
+
+For a fresh account you can skip the swap entirely: pass the policy to
+bootstrap instead, and the role never gets `AdministratorAccess` in the first
+place:
+
+```bash
+cdk bootstrap --cloudformation-execution-policies \
+  arn:aws:iam::ACCOUNT_ID:policy/GlacierVaultCfnExecScoped
+```
+
+Two things must be true for that to work, and a plain `cdk bootstrap` will
+fail without them:
+
+1. **The scoped policy must already exist** — create it with admin
+   credentials before running bootstrap, since the setup credential cannot
+   create policies (it has no `iam:CreatePolicy`).
+2. **Bootstrap must be run with the flag.** The bootstrap template attaches
+   `AdministratorAccess` to the cfn-exec role by default, and the setup
+   policy's `BootstrapExecRoleGetsOnlyThisPolicy` condition only allows
+   attaching the scoped policy — so a plain `cdk bootstrap` is denied at the
+   attach step. The flag tells the template to attach the scoped policy
+   instead, which the condition allows.
+
+With those two in place, the setup credential policy alone covers the whole
+flow: bootstrap (with the flag), `cdk deploy`, the setup wizard, and
+CloudFront setup — nothing else needed.
+
+If you take that path, the setup credential policy in step 1 needs one
+matching change: its `BootstrapExecRoleGetsOnlyThisPolicy` statement currently
+allows `iam:AttachRolePolicy` on the cfn-exec role only when the policy is
+`AdministratorAccess`. On first bootstrap there is no cfn-exec role yet, so
+CloudFormation runs with the setup credential directly — and it would try to
+attach the scoped policy, which the condition would deny. Change the
+condition to allow both ARNs during the transition, then drop
+`AdministratorAccess` from it once the swap is done:
+
+```json
+"Condition": {"ArnEquals": {"iam:PolicyARN": [
+  "arn:aws:iam::aws:policy/AdministratorAccess",
+  "arn:aws:iam::ACCOUNT_ID:policy/GlacierVaultCfnExecScoped"
+]}}
+```
+
+That statement is the single point where the two policies connect: the setup
+policy decides *which* policy may be attached to the cfn-exec role, and the
+cfn-exec policy decides what the role may do once attached. If you do the
+swap with admin credentials after bootstrap (the CLI commands above), the
+setup policy needs no change at all — but update the condition anyway, or a
+future `cdk bootstrap` run with the setup credential would try to put
+`AdministratorAccess` back.
+
+Caveats, stated plainly:
+
+- **This policy matches the stack as it exists today.** If upstream
+  `rustic-aws` adds a new resource type (say, a Lambda), the next deploy
+  fails on the missing permission — the error names the action, so add it to
+  the policy and redeploy. A no-op deploy does not validate the policy,
+  because CloudFormation only assumes the role when a changeset actually
+  executes something; the first deploy that changes a resource is the real
+  test.
+- **Re-running `cdk bootstrap` needs admin back.** Bootstrap manages the
+  CDKToolkit stack itself (assets bucket, ECR repo, SSM parameter, the CDK
+  roles), which this policy does not cover. Temporarily re-attach
+  `AdministratorAccess`, bootstrap, then swap the scoped policy back in.
+- **Why this matters even though the role is only assumable by
+  CloudFormation:** anyone holding the setup credential can assume the CDK
+  deploy role and deploy an arbitrary template, so `AdministratorAccess` on
+  cfn-exec turns a stolen setup credential into full admin. Scoping the role
+  closes that path for everything outside the stack's own resources. It does
+  not replace deleting the setup user after setup — do both.
 
 ## 2. Deploy the container
 
