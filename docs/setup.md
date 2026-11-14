@@ -29,7 +29,10 @@ In the AWS Console:
      CloudFront provisioning need the permissions below — no `service:*`
      wildcards, and resources scoped wherever AWS allows it. Replace
      `ACCOUNT_ID` with your AWS account ID, `REGION` with your region, and
-     `STACK_NAME` with the stack name (default `rustic-cold-backups`).
+     `STACK_PREFIX` with the first 20 characters of the stack name (for a
+     stack named `rustic-cold-backups-scoped`, that's `rustic-cold-backups-`).
+     One credential covers every stack name in the same family, so renaming
+     the stack to another name sharing that prefix needs no policy update.
 
      The same policy is also available as a standalone file,
      [`docs/setup-credential-policy.json`](setup-credential-policy.json) —
@@ -59,7 +62,7 @@ In the AWS Console:
            ],
            "Resource": [
              "arn:aws:cloudformation:REGION:ACCOUNT_ID:stack/CDKToolkit/*",
-             "arn:aws:cloudformation:REGION:ACCOUNT_ID:stack/STACK_NAME/*"
+             "arn:aws:cloudformation:REGION:ACCOUNT_ID:stack/STACK_PREFIX*"
            ]
          },
          {
@@ -143,19 +146,19 @@ In the AWS Console:
            "Sid": "AppResolvesStackOutputs",
            "Effect": "Allow",
            "Action": "iam:GetRole",
-           "Resource": "arn:aws:iam::ACCOUNT_ID:role/STACK_NAME-s3batchrole*"
+           "Resource": "arn:aws:iam::ACCOUNT_ID:role/STACK_PREFIX*"
          },
          {
            "Sid": "AppCreatesKeyForBackupUser",
            "Effect": "Allow",
            "Action": "iam:CreateAccessKey",
-           "Resource": "arn:aws:iam::ACCOUNT_ID:user/STACK_NAME-user*"
+           "Resource": "arn:aws:iam::ACCOUNT_ID:user/STACK_PREFIX*"
          },
          {
            "Sid": "OptionalSnapshotDeleteToggle",
            "Effect": "Allow",
            "Action": ["iam:PutUserPolicy", "iam:DeleteUserPolicy"],
-           "Resource": "arn:aws:iam::ACCOUNT_ID:user/STACK_NAME-user*"
+           "Resource": "arn:aws:iam::ACCOUNT_ID:user/STACK_PREFIX*"
          },
          {
            "Sid": "CloudFrontFreeEgressSetup",
@@ -174,7 +177,7 @@ In the AWS Console:
            "Sid": "LetCloudFrontReadColdBucket",
            "Effect": "Allow",
            "Action": ["s3:GetBucketPolicy", "s3:PutBucketPolicy"],
-           "Resource": "arn:aws:s3:::STACK_NAME-coldbucket*"
+           "Resource": "arn:aws:s3:::STACK_PREFIX*coldbucket*"
          }
        ]
      }
@@ -190,9 +193,11 @@ In the AWS Console:
        role**, not by this credential — that's why there are no SQS or
        stack-bucket statements here. The credential only needs the direct
        calls listed above (plus `AssumeRole` so CDK can use its roles).
-     - **CDK-generated names** start with the stack name, so `STACK_NAME-*`
-       matches the stack's user, batch role, and cold bucket. If you renamed
-       the stack, update the prefix.
+     - **CDK-generated names** start with the stack name, so the patterns
+       use `STACK_PREFIX`, the first 20 characters of the stack name — it
+       matches the stack's user, batch role, and cold bucket under any stack
+       name sharing that prefix, and it survives CDK's truncation of long
+       physical names (see the cfn-exec section below).
      - If your bootstrap is already in place and you never use container
        assets, the two `Ecr*` statements can be dropped.
      - Be honest with yourself about what this policy means: CDK bootstrap
@@ -225,8 +230,8 @@ only:
   (SSL-enforced, lifecycle rules, `RemovalPolicy.DESTROY`, no versioning)
 - 1 SQS queue: cold-events-queue, plus the S3 → SQS notification on the cold
   bucket (`OBJECT_RESTORE_COMPLETED`)
-- 1 IAM role: `STACK_NAME-s3batchrole*` (assumed by S3 Batch operations)
-- 1 IAM user: `STACK_NAME-user*` with one managed policy
+- 1 IAM role: the S3 Batch role, named after the stack (assumed by S3 Batch operations)
+- 1 IAM user: the runtime `rustic` user, named after the stack, with one managed policy
 - 1 Lambda function + execution role: `BucketNotificationsHandler`, the
   custom resource CDK uses to configure the S3 bucket notification
 
@@ -400,8 +405,8 @@ the execution role — without it, deploy fails with AccessDenied even though
 bootstrap succeeded.
 
 If you ever need to do the swap outside the wizard, the manual commands are
-(run as an admin; replace `ACCOUNT_ID`, `REGION`, and `STACK_NAME` —
-default `rustic-cold-backups`):
+(run as an admin; replace `ACCOUNT_ID`, `REGION`, and `STACK_PREFIX` — the
+first 20 characters of the stack name):
 
 ```bash
 aws iam create-policy \
