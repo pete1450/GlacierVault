@@ -82,7 +82,13 @@ In the AWS Console:
            "Effect": "Allow",
            "Action": "iam:AttachRolePolicy",
            "Resource": "arn:aws:iam::ACCOUNT_ID:role/cdk-hnb659fds-cfn-exec-role-ACCOUNT_ID-REGION",
-           "Condition": {"ArnEquals": {"iam:PolicyARN": "arn:aws:iam::aws:policy/AdministratorAccess"}}
+           "Condition": {"ArnEquals": {"iam:PolicyARN": "arn:aws:iam::ACCOUNT_ID:policy/GlacierVaultCfnExecScoped"}}
+         },
+         {
+           "Sid": "CreateCfnExecScopedPolicy",
+           "Effect": "Allow",
+           "Action": ["iam:CreatePolicy", "iam:GetPolicy"],
+           "Resource": "arn:aws:iam::ACCOUNT_ID:policy/GlacierVaultCfnExecScoped"
          },
          {
            "Sid": "BootstrapAssetsBucket",
@@ -302,8 +308,18 @@ Create this as a customer managed policy, then swap it in for
 }
 ```
 
-Apply it with the AWS CLI (run as an admin; replace `ACCOUNT_ID`, `REGION`,
-and `STACK_NAME` — default `rustic-cold-backups`):
+The setup wizard does this automatically — no manual steps. When you run
+setup from the app, it creates the `GlacierVaultCfnExecScoped` policy
+(`iam:CreatePolicy` on exactly that policy name, granted by the
+`CreateCfnExecScopedPolicy` statement in step 1) and then runs
+`cdk bootstrap --cloudformation-execution-policies <policy-arn>`, so the
+cfn-exec role never gets `AdministratorAccess`. Re-running setup is safe:
+creating the policy is idempotent, and re-bootstrapping with the flag swaps
+an existing admin attachment for the scoped policy.
+
+If you ever need to do the swap outside the wizard, the manual commands are
+(run as an admin; replace `ACCOUNT_ID`, `REGION`, and `STACK_NAME` —
+default `rustic-cold-backups`):
 
 ```bash
 aws iam create-policy \

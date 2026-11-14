@@ -65,15 +65,37 @@ type Provisioner struct {
 
 // Bootstrap runs `cdk bootstrap aws://<account>/<region>` and returns the
 // resolved AWS account ID, which is persisted for the warmup tool config.
+//
+// Before bootstrapping, the wizard creates the scoped CloudFormation
+// execution policy (GlacierVaultCfnExecScoped) and passes it via
+// --cloudformation-execution-policies, so the cfn-exec role never gets CDK's
+// default AdministratorAccess. Re-running setup is safe: the policy create
+// is idempotent, and re-bootstrapping with the flag swaps an existing admin
+// attachment for the scoped policy.
 func (p *Provisioner) Bootstrap(ctx context.Context) (string, error) {
 	accountID, err := p.getAccountID(ctx)
 	if err != nil {
 		return "", fmt.Errorf("resolve account ID: %w", err)
 	}
-	if err := p.runCDK(ctx, "bootstrap", "--force", fmt.Sprintf("aws://%s/%s", accountID, p.Region)); err != nil {
+	policyArn, err := EnsureCfnExecPolicy(ctx, p.AccessKey, p.SecretKey, p.Region, accountID, p.StackName)
+	if err != nil {
+		return "", fmt.Errorf("ensure scoped cfn-exec policy: %w", err)
+	}
+	if p.LogFn != nil {
+		p.LogFn("Using scoped CloudFormation execution policy (no AdministratorAccess)...")
+	}
+	if err := p.runCDK(ctx, bootstrapArgs(accountID, p.Region, policyArn)...); err != nil {
 		return "", err
 	}
 	return accountID, nil
+}
+
+// bootstrapArgs builds the `cdk bootstrap` arguments. The scoped execution
+// policy replaces CDK's default AdministratorAccess on the cfn-exec role.
+func bootstrapArgs(accountID, region, policyArn string) []string {
+	return []string{"bootstrap", "--force",
+		"--cloudformation-execution-policies", policyArn,
+		fmt.Sprintf("aws://%s/%s", accountID, region)}
 }
 
 // getAccountID calls STS GetCallerIdentity to resolve the AWS account ID.
