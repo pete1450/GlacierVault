@@ -69,7 +69,7 @@ func TestCfnExecPolicyDocumentResources(t *testing.T) {
 		"NotificationsHandlerRole":       "arn:aws:iam::788142818300:role/rustic-cold-backups-*BucketNotificationsHandle*",
 		"NotificationsHandlerRolePass":   "arn:aws:iam::788142818300:role/rustic-cold-backups-*BucketNotificationsHandle*",
 		"NotificationsHandlerRolePolicy": "arn:aws:iam::788142818300:role/rustic-cold-backups-*BucketNotificationsHandle*",
-		"NotificationsHandlerFunction":   "arn:aws:lambda:us-east-1:788142818300:function/rustic-cold-backups-*BucketNotificationsHandle*",
+		"NotificationsHandlerFunction":   "arn:aws:lambda:us-east-1:788142818300:function:rustic-cold-backups-*BucketNotificationsHandle*",
 		// CDK resolves every stack's BootstrapVersion parameter from SSM at
 		// deploy time using the execution role; without this, changeset
 		// creation fails with AccessDenied on ssm:GetParameters.
@@ -328,7 +328,21 @@ func TestCfnExecPolicyMatchesObservedNames(t *testing.T) {
 		"NotificationsHandlerFunction": {
 			// Expected form of the function name (the deploy never got far
 			// enough to create it, so this one is inferred, not observed).
-			"arn:aws:lambda:us-east-1:788142818300:function/rustic-cold-backups-scope-BucketNotificationsHandle-XAnYzOrQPjAt",
+			// Lambda function ARNs use a colon after "function", not a
+			// slash — a slash here never matches a real function ARN.
+			"arn:aws:lambda:us-east-1:788142818300:function:rustic-cold-backups-scope-BucketNotificationsHandle-XAnYzOrQPjAt",
+		},
+	})
+	checkNames(t, "rustic-cold-scoped", map[string][]string{
+		"NotificationsHandlerFunction": {
+			// From the third log: CreateFunction denied on this function
+			// because the pattern used a slash after "function". The
+			// real ARN uses a colon.
+			"arn:aws:lambda:us-east-1:788142818300:function:rustic-cold-scoped-BucketNotificationsHandler050a0-ejuchIWeHi2E",
+		},
+		"NotificationsHandlerRole": {
+			// Created successfully in the third deploy.
+			"arn:aws:iam::788142818300:role/rustic-cold-scoped-BucketNotificationsHandle-abcdefgh",
 		},
 	})
 	checkNames(t, "rustic-cold-backups-scoped2", map[string][]string{

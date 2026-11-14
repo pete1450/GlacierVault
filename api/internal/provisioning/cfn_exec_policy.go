@@ -198,7 +198,13 @@ func CfnExecPolicyDocument(accountID, region, stackName string) string {
 					// resource provider.
 					"lambda:InvokeFunction",
 				},
-				"Resource": fmt.Sprintf("arn:aws:lambda:%s:%s:function/%s*BucketNotificationsHandle*", region, accountID, prefix),
+				// Lambda function ARNs use a COLON after "function"
+				// (arn:aws:lambda:region:account:function:name), not a
+				// slash like IAM roles do. A slash here never matches a
+				// real function ARN, so CreateFunction/DeleteFunction were
+				// denied even though the pattern looked right — that is
+				// what failed the 2026-11-14 rustic-cold-scoped deploy.
+				"Resource": fmt.Sprintf("arn:aws:lambda:%s:%s:function:%s*BucketNotificationsHandle*", region, accountID, prefix),
 			},
 			{
 				// CDK adds a BootstrapVersion parameter to every stack,

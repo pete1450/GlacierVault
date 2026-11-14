@@ -365,7 +365,7 @@ Create this as a customer managed policy, then swap it in for
         "lambda:TagResource", "lambda:UntagResource", "lambda:ListTags",
         "lambda:InvokeFunction"
       ],
-      "Resource": "arn:aws:lambda:REGION:ACCOUNT_ID:function/STACK_PREFIX*BucketNotificationsHandle*"
+      "Resource": "arn:aws:lambda:REGION:ACCOUNT_ID:function:STACK_PREFIX*BucketNotificationsHandle*"
     },
     {
       "Sid": "BootstrapVersionParameter",
