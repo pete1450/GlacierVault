@@ -53,23 +53,23 @@ func TestCfnExecPolicyDocument(t *testing.T) {
 func TestCfnExecPolicyDocumentResources(t *testing.T) {
 	parsed := parseCfnExecDoc(t, "788142818300", "us-east-1", "rustic-cold-backups-scoped")
 
-	// Resource patterns use the stack name minus its last character, bare
-	// with no separator after it, so they match both truncated physical
-	// names ("rustic-cold-backups-scope-...") and untruncated ones
-	// ("rustic-cold-backups-scoped-...").
+	// Resource patterns use the first 20 characters of the stack name,
+	// bare with no separator after it, so they match both truncated
+	// physical names ("rustic-cold-backups-scope-...") and untruncated
+	// ones ("rustic-cold-backups-scoped-...").
 	wantResources := map[string]string{
-		"StackBuckets":    "arn:aws:s3:::rustic-cold-backups-scope*",
-		"StackQueue":      "arn:aws:sqs:us-east-1:788142818300:rustic-cold-backups-scope*",
-		"StackBatchRole":  "arn:aws:iam::788142818300:role/rustic-cold-backups-scope*",
-		"StackUser":       "arn:aws:iam::788142818300:user/rustic-cold-backups-scope*",
-		"StackUserPolicy": "arn:aws:iam::788142818300:policy/rustic-cold-backups-scope*",
+		"StackBuckets":    "arn:aws:s3:::rustic-cold-backups-*",
+		"StackQueue":      "arn:aws:sqs:us-east-1:788142818300:rustic-cold-backups-*",
+		"StackBatchRole":  "arn:aws:iam::788142818300:role/rustic-cold-backups-*",
+		"StackUser":       "arn:aws:iam::788142818300:user/rustic-cold-backups-*",
+		"StackUserPolicy": "arn:aws:iam::788142818300:policy/rustic-cold-backups-*",
 		// The handler role/function names are truncated in both the stack
 		// part and the logical part, so the pattern carries a wildcard
 		// between the prefix and the handler name.
-		"NotificationsHandlerRole":       "arn:aws:iam::788142818300:role/rustic-cold-backups-scope*BucketNotificationsHandle*",
-		"NotificationsHandlerRolePass":   "arn:aws:iam::788142818300:role/rustic-cold-backups-scope*BucketNotificationsHandle*",
-		"NotificationsHandlerRolePolicy": "arn:aws:iam::788142818300:role/rustic-cold-backups-scope*BucketNotificationsHandle*",
-		"NotificationsHandlerFunction":   "arn:aws:lambda:us-east-1:788142818300:function/rustic-cold-backups-scope*BucketNotificationsHandle*",
+		"NotificationsHandlerRole":       "arn:aws:iam::788142818300:role/rustic-cold-backups-*BucketNotificationsHandle*",
+		"NotificationsHandlerRolePass":   "arn:aws:iam::788142818300:role/rustic-cold-backups-*BucketNotificationsHandle*",
+		"NotificationsHandlerRolePolicy": "arn:aws:iam::788142818300:role/rustic-cold-backups-*BucketNotificationsHandle*",
+		"NotificationsHandlerFunction":   "arn:aws:lambda:us-east-1:788142818300:function/rustic-cold-backups-*BucketNotificationsHandle*",
 		// CDK resolves every stack's BootstrapVersion parameter from SSM at
 		// deploy time using the execution role; without this, changeset
 		// creation fails with AccessDenied on ssm:GetParameters.
@@ -140,16 +140,17 @@ func TestCfnExecPolicyDocumentSubstitutesInputs(t *testing.T) {
 			t.Errorf("statement %s: Resource %q missing account ID", st.Sid, st.Resource)
 		}
 		// The bootstrap version parameter is shared across stacks, so it
-		// carries no stack name — everything else must carry the
-		// truncated prefix (stack name minus its last character).
+		// carries no stack name — everything else must carry the prefix
+		// (the first 20 characters of the stack name, or the whole name
+		// when it is shorter).
 		if st.Sid == "BootstrapVersionParameter" {
 			continue
 		}
-		if !strings.Contains(st.Resource, "my-stac") {
+		if !strings.Contains(st.Resource, "my-stack") {
 			t.Errorf("statement %s: Resource %q missing stack name prefix", st.Sid, st.Resource)
 		}
 	}
-	if got := parsed.Statement[1].Resource; got != "arn:aws:sqs:eu-west-1:111122223333:my-stac*" {
+	if got := parsed.Statement[1].Resource; got != "arn:aws:sqs:eu-west-1:111122223333:my-stack*" {
 		t.Errorf("StackQueue Resource = %q", got)
 	}
 }
@@ -228,14 +229,19 @@ func TestPolicyDocumentsEqual(t *testing.T) {
 }
 
 func TestCfnExecResourcePrefix(t *testing.T) {
-	if got := cfnExecResourcePrefix("rustic-cold-backups-scoped"); got != "rustic-cold-backups-scope" {
+	// The first 20 characters: "rustic-cold-backups-" for both stack
+	// names, so one policy covers every stack in the family.
+	if got := cfnExecResourcePrefix("rustic-cold-backups-scoped"); got != "rustic-cold-backups-" {
 		t.Errorf("cfnExecResourcePrefix = %q", got)
+	}
+	if got := cfnExecResourcePrefix("rustic-cold-backups-scoped2"); got != "rustic-cold-backups-" {
+		t.Errorf("cfnExecResourcePrefix = %q", got)
+	}
+	if got := cfnExecResourcePrefix("my-stack"); got != "my-stack" {
+		t.Errorf("cfnExecResourcePrefix(\"my-stack\") = %q", got)
 	}
 	if got := cfnExecResourcePrefix(""); got != "" {
 		t.Errorf("cfnExecResourcePrefix(\"\") = %q", got)
-	}
-	if got := cfnExecResourcePrefix("a"); got != "" {
-		t.Errorf("cfnExecResourcePrefix(\"a\") = %q", got)
 	}
 }
 
@@ -264,18 +270,35 @@ func globMatch(pattern, value string) bool {
 }
 
 func TestCfnExecPolicyMatchesObservedNames(t *testing.T) {
-	// Regression test for the 2026-11-14 deploy failure: CDK truncates
+	// Regression test for the 2026-11-14 deploy failures: CDK truncates
 	// physical names to fit service limits, so the batch buckets came out
 	// as "rustic-cold-backups-scope-..." and the policy's
-	// "rustic-cold-backups-scoped-*" pattern did not match them. The
-	// truncated names below are copied from the deploy log; the
-	// untruncated ones are the forms the other resources take.
-	parsed := parseCfnExecDoc(t, "788142818300", "us-east-1", "rustic-cold-backups-scoped")
-	bySid := map[string]string{}
-	for _, st := range parsed.Statement {
-		bySid[st.Sid] = st.Resource
+	// "rustic-cold-backups-scoped-*" pattern did not match them — and the
+	// second stack name ("scoped2") truncated two characters, so the
+	// drop-one-character prefix did not match either. The truncated names
+	// below are copied from the two deploy logs; the untruncated ones are
+	// the forms the other resources take.
+	checkNames := func(t *testing.T, stackName string, cases map[string][]string) {
+		t.Helper()
+		parsed := parseCfnExecDoc(t, "788142818300", "us-east-1", stackName)
+		bySid := map[string]string{}
+		for _, st := range parsed.Statement {
+			bySid[st.Sid] = st.Resource
+		}
+		for sid, names := range cases {
+			pattern, ok := bySid[sid]
+			if !ok {
+				t.Errorf("stack %s: missing statement %q", stackName, sid)
+				continue
+			}
+			for _, name := range names {
+				if !globMatch(pattern, name) {
+					t.Errorf("stack %s, statement %s: pattern %q does not match %q", stackName, sid, pattern, name)
+				}
+			}
+		}
 	}
-	cases := map[string][]string{
+	checkNames(t, "rustic-cold-backups-scoped", map[string][]string{
 		"StackBuckets": {
 			// Truncated names, from the log (CreateBucket denied on these).
 			"arn:aws:s3:::rustic-cold-backups-scope-batchmanifestsbucket86c3-xp8fyxtbdydf",
@@ -307,20 +330,30 @@ func TestCfnExecPolicyMatchesObservedNames(t *testing.T) {
 			// enough to create it, so this one is inferred, not observed).
 			"arn:aws:lambda:us-east-1:788142818300:function/rustic-cold-backups-scope-BucketNotificationsHandle-XAnYzOrQPjAt",
 		},
-	}
-	for sid, names := range cases {
-		pattern, ok := bySid[sid]
-		if !ok {
-			t.Errorf("missing statement %q", sid)
-			continue
-		}
-		for _, name := range names {
-			if !globMatch(pattern, name) {
-				t.Errorf("statement %s: pattern %q does not match %q", sid, pattern, name)
-			}
-		}
-	}
+	})
+	checkNames(t, "rustic-cold-backups-scoped2", map[string][]string{
+		"StackBuckets": {
+			// Truncated names, from the second log — the stack name lost
+			// TWO characters here ("scoped2" -> "scope").
+			"arn:aws:s3:::rustic-cold-backups-scope-batchreportsbucket05a6b2-rsju97xtjvx5",
+			"arn:aws:s3:::rustic-cold-backups-scope-batchmanifestsbucket86c3-oift89ypp2xc",
+			// Untruncated form.
+			"arn:aws:s3:::rustic-cold-backups-scoped2-hotbucketbee04f5d-abcdefghijkl",
+		},
+		"StackUser": {
+			"arn:aws:iam::788142818300:user/rustic-cold-backups-scoped2-user2C2B57AE-abcdefghijkl",
+		},
+		"NotificationsHandlerRole": {
+			// From the second log (CreateRole denied on this role).
+			"arn:aws:iam::788142818300:role/rustic-cold-backups-scope-BucketNotificationsHandle-IrUXrnNmMrC1",
+		},
+	})
 	// And the patterns must not match unrelated resources.
+	parsed := parseCfnExecDoc(t, "788142818300", "us-east-1", "rustic-cold-backups-scoped")
+	bySid := map[string]string{}
+	for _, st := range parsed.Statement {
+		bySid[st.Sid] = st.Resource
+	}
 	if globMatch(bySid["StackBuckets"], "arn:aws:s3:::some-other-bucket") {
 		t.Errorf("StackBuckets pattern matches an unrelated bucket")
 	}

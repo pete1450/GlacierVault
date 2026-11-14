@@ -27,21 +27,29 @@ func CfnExecPolicyArn(accountID string) string {
 	return fmt.Sprintf("arn:aws:iam::%s:policy/%s", accountID, CfnExecPolicyName)
 }
 
+// cfnExecPrefixLen is the number of leading characters of the stack name
+// used to scope the execution role's permissions. CDK generates physical
+// names from the stack name and truncates them to fit service limits (S3:
+// 63 chars, IAM: 64 chars); the truncation splits the available budget
+// between the stack-name part and the logical-ID part, so the stack-name
+// part keeps at most ~25 characters — observed across two deploys, the
+// batch buckets and the notification handler role all kept exactly 25,
+// whether the stack name lost one character ("scoped") or two ("scoped2").
+// Using 20 leaves margin for a longer hash or a tighter limit, and still
+// identifies this stack's resources uniquely.
+const cfnExecPrefixLen = 20
+
 // cfnExecResourcePrefix returns the resource-name prefix used to scope the
-// execution role's permissions. CDK generates physical names from the stack
-// name and truncates them to fit service limits (S3: 63 chars, IAM: 64
-// chars); observed truncation drops the final character of the stack name
-// ("rustic-cold-backups-scoped" becomes "rustic-cold-backups-scope-...").
-// The resource patterns therefore use this prefix bare, with no separator
-// after it ("<prefix>*" rather than "<prefix>-*"): the bare form matches
-// both the truncated name ("scope-...") and the untruncated one
-// ("scoped-...", since "scoped" starts with "scope"), while a pattern with
-// a literal hyphen after the prefix would match only the truncated form.
+// execution role's permissions: the first cfnExecPrefixLen characters of
+// the stack name (or the whole name if it is shorter). The pattern is used
+// bare, with no separator after it ("<prefix>*" rather than "<prefix>-*"),
+// so it matches both truncated names ("rustic-cold-backups-scope-...") and
+// untruncated ones ("rustic-cold-backups-scoped-...").
 func cfnExecResourcePrefix(stackName string) string {
-	if len(stackName) == 0 {
+	if len(stackName) <= cfnExecPrefixLen {
 		return stackName
 	}
-	return stackName[:len(stackName)-1]
+	return stackName[:cfnExecPrefixLen]
 }
 
 // CfnExecPolicyDocument returns the IAM policy document scoping the

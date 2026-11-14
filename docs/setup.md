@@ -235,16 +235,22 @@ notification handler — and CloudFront is provisioned by the app itself, not
 by this stack, so the role needs no CloudFront permissions at all.
 
 One catch: CDK generates physical names from the stack name and truncates
-them to fit service limits (S3: 63 chars, IAM: 64 chars). For a stack named
-`rustic-cold-backups-scoped`, the long bucket names come out as
-`rustic-cold-backups-scope-batchmanifestsbucket...` — the final `d` is cut —
-and the handler role as `rustic-cold-backups-scope-BucketNotificationsHandle...`.
-The patterns below therefore use `STACK_PREFIX`, the stack name minus its
-final character, bare with no separator after it (`STACK_PREFIX*` rather
-than `STACK_PREFIX-*`): the bare form matches both the truncated name
-(`scope-...`) and the untruncated one (`scoped-...`, since "scoped" starts
-with "scope"), while a pattern with a literal hyphen after the prefix would
-match only the truncated form.
+them to fit service limits (S3: 63 chars, IAM: 64 chars). The truncation
+splits the available budget between the stack-name part and the logical-ID
+part, so the stack-name part keeps at most ~25 characters — for a stack
+named `rustic-cold-backups-scoped`, the long bucket names come out as
+`rustic-cold-backups-scope-batchmanifestsbucket...` (the final `d` is cut),
+and for `rustic-cold-backups-scoped2` two characters are cut
+(`scoped2` → `scope`); the handler role comes out as
+`rustic-cold-backups-scope-BucketNotificationsHandle...` either way.
+The patterns below therefore use `STACK_PREFIX`, the first 20 characters
+of the stack name, bare with no separator after it (`STACK_PREFIX*` rather
+than `STACK_PREFIX-*`): 20 is short enough to survive any truncation
+observed so far with margin, and the bare form matches both the truncated
+name (`scope-...`) and the untruncated one (`scoped-...`, since "scoped"
+starts with "scope"), while a pattern with a literal hyphen after the
+prefix would match only the truncated form. One policy covers every stack
+name in the same family.
 
 Create this as a customer managed policy, then swap it in for
 `AdministratorAccess` on the cfn-exec role:
