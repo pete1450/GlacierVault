@@ -328,6 +328,23 @@ cdk bootstrap --cloudformation-execution-policies \
   arn:aws:iam::ACCOUNT_ID:policy/GlacierVaultCfnExecScoped
 ```
 
+Two things must be true for that to work, and a plain `cdk bootstrap` will
+fail without them:
+
+1. **The scoped policy must already exist** — create it with admin
+   credentials before running bootstrap, since the setup credential cannot
+   create policies (it has no `iam:CreatePolicy`).
+2. **Bootstrap must be run with the flag.** The bootstrap template attaches
+   `AdministratorAccess` to the cfn-exec role by default, and the setup
+   policy's `BootstrapExecRoleGetsOnlyThisPolicy` condition only allows
+   attaching the scoped policy — so a plain `cdk bootstrap` is denied at the
+   attach step. The flag tells the template to attach the scoped policy
+   instead, which the condition allows.
+
+With those two in place, the setup credential policy alone covers the whole
+flow: bootstrap (with the flag), `cdk deploy`, the setup wizard, and
+CloudFront setup — nothing else needed.
+
 If you take that path, the setup credential policy in step 1 needs one
 matching change: its `BootstrapExecRoleGetsOnlyThisPolicy` statement currently
 allows `iam:AttachRolePolicy` on the cfn-exec role only when the policy is
