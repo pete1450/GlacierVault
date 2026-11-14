@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
+	"reflect"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
@@ -103,6 +105,18 @@ func CfnExecPolicyDocument(accountID, region, stackName string) string {
 				"Resource": fmt.Sprintf("arn:aws:iam::%s:policy/%s-*", accountID, stackName),
 			},
 			{
+				// CDK adds a BootstrapVersion parameter to every stack,
+				// resolved from SSM by CloudFormation at deploy time using
+				// the execution role. Without this, changeset creation
+				// fails with AccessDenied on ssm:GetParameters.
+				// The qualifier hnb659fds is CDK's default bootstrap
+				// qualifier, matching the rest of the setup.
+				"Sid":      "BootstrapVersionParameter",
+				"Effect":   "Allow",
+				"Action":   []string{"ssm:GetParameter", "ssm:GetParameters"},
+				"Resource": fmt.Sprintf("arn:aws:ssm:%s:%s:parameter/cdk-bootstrap/hnb659fds/version", region, accountID),
+			},
+			{
 				"Sid":    "ReadOnlyDiscovery",
 				"Effect": "Allow",
 				"Action": []string{
@@ -118,11 +132,13 @@ func CfnExecPolicyDocument(accountID, region, stackName string) string {
 }
 
 // EnsureCfnExecPolicy creates the scoped cfn-exec managed policy if it does
-// not exist yet and returns its ARN. It is idempotent: if the policy already
-// exists (re-running setup), its ARN is returned as-is.
+// not exist yet, or updates its document if it differs from the expected
+// one, and returns its ARN.
 //
 // Requires the setup credential to have iam:CreatePolicy and iam:GetPolicy
-// on the policy ARN (see docs/setup.md step 1).
+// on the policy ARN (see docs/setup.md step 1), plus iam:GetPolicyVersion,
+// iam:ListPolicyVersions, iam:CreatePolicyVersion and iam:DeletePolicyVersion
+// on the same ARN for the update path.
 func EnsureCfnExecPolicy(ctx context.Context, accessKey, secretKey, region, accountID, stackName string) (string, error) {
 	cfg, err := awsconfig.LoadDefaultConfig(ctx,
 		awsconfig.WithRegion(region),
@@ -133,21 +149,89 @@ func EnsureCfnExecPolicy(ctx context.Context, accessKey, secretKey, region, acco
 	}
 	client := iam.NewFromConfig(cfg)
 	arn := CfnExecPolicyArn(accountID)
+	doc := CfnExecPolicyDocument(accountID, region, stackName)
 	_, err = client.CreatePolicy(ctx, &iam.CreatePolicyInput{
 		PolicyName:     aws.String(CfnExecPolicyName),
-		PolicyDocument: aws.String(CfnExecPolicyDocument(accountID, region, stackName)),
+		PolicyDocument: aws.String(doc),
 		Description:    aws.String("Scoped CloudFormation execution policy for the GlacierVault stack (replaces AdministratorAccess on the CDK cfn-exec role)."),
 	})
 	if err == nil {
 		return arn, nil
 	}
 	var exists *iamtypes.EntityAlreadyExistsException
-	if errors.As(err, &exists) {
-		out, getErr := client.GetPolicy(ctx, &iam.GetPolicyInput{PolicyArn: aws.String(arn)})
-		if getErr != nil {
-			return "", fmt.Errorf("get existing policy: %w", getErr)
-		}
-		return aws.ToString(out.Policy.Arn), nil
+	if !errors.As(err, &exists) {
+		return "", fmt.Errorf("create policy: %w — the setup credential needs iam:CreatePolicy and iam:GetPolicy on %s (see docs/setup.md step 1)", err, arn)
 	}
-	return "", fmt.Errorf("create policy: %w — the setup credential needs iam:CreatePolicy and iam:GetPolicy on %s (see docs/setup.md step 1)", err, arn)
+	// Policy already exists (re-running setup): bring its document up to
+	// date if the expected policy has changed since it was created.
+	if err := updateCfnExecPolicyDocument(ctx, client, arn, doc); err != nil {
+		return "", err
+	}
+	return arn, nil
+}
+
+// updateCfnExecPolicyDocument replaces the policy's default version when its
+// document differs from doc. It is a no-op when the documents already match.
+// Managed policies hold at most 5 versions, so non-default versions are
+// pruned first (only the default version is ever in effect).
+func updateCfnExecPolicyDocument(ctx context.Context, client *iam.Client, arn, doc string) error {
+	pol, err := client.GetPolicy(ctx, &iam.GetPolicyInput{PolicyArn: aws.String(arn)})
+	if err != nil {
+		return fmt.Errorf("get policy: %w", err)
+	}
+	verOut, err := client.GetPolicyVersion(ctx, &iam.GetPolicyVersionInput{
+		PolicyArn: aws.String(arn),
+		VersionId: pol.Policy.DefaultVersionId,
+	})
+	if err != nil {
+		return fmt.Errorf("get policy version: %w", err)
+	}
+	current, err := url.QueryUnescape(aws.ToString(verOut.PolicyVersion.Document))
+	if err != nil {
+		return fmt.Errorf("decode policy document: %w", err)
+	}
+	equal, err := policyDocumentsEqual(current, doc)
+	if err != nil {
+		return fmt.Errorf("compare policy documents: %w", err)
+	}
+	if equal {
+		return nil
+	}
+	listOut, err := client.ListPolicyVersions(ctx, &iam.ListPolicyVersionsInput{PolicyArn: aws.String(arn)})
+	if err != nil {
+		return fmt.Errorf("list policy versions: %w", err)
+	}
+	for _, v := range listOut.Versions {
+		if aws.ToString(v.VersionId) == aws.ToString(pol.Policy.DefaultVersionId) {
+			continue
+		}
+		if _, err := client.DeletePolicyVersion(ctx, &iam.DeletePolicyVersionInput{
+			PolicyArn: aws.String(arn),
+			VersionId: v.VersionId,
+		}); err != nil {
+			return fmt.Errorf("delete old policy version %s: %w", aws.ToString(v.VersionId), err)
+		}
+	}
+	_, err = client.CreatePolicyVersion(ctx, &iam.CreatePolicyVersionInput{
+		PolicyArn:      aws.String(arn),
+		PolicyDocument: aws.String(doc),
+		SetAsDefault:   true,
+	})
+	if err != nil {
+		return fmt.Errorf("create policy version: %w — the setup credential needs iam:CreatePolicyVersion, iam:ListPolicyVersions, iam:GetPolicyVersion and iam:DeletePolicyVersion on %s (see docs/setup.md step 1)", err, arn)
+	}
+	return nil
+}
+
+// policyDocumentsEqual reports whether two IAM policy JSON documents describe
+// the same policy. Key order and whitespace are ignored.
+func policyDocumentsEqual(a, b string) (bool, error) {
+	var pa, pb interface{}
+	if err := json.Unmarshal([]byte(a), &pa); err != nil {
+		return false, fmt.Errorf("parse first document: %w", err)
+	}
+	if err := json.Unmarshal([]byte(b), &pb); err != nil {
+		return false, fmt.Errorf("parse second document: %w", err)
+	}
+	return reflect.DeepEqual(pa, pb), nil
 }

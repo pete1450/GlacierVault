@@ -92,7 +92,9 @@ In the AWS Console:
          {
            "Sid": "CreateCfnExecScopedPolicy",
            "Effect": "Allow",
-           "Action": ["iam:CreatePolicy", "iam:GetPolicy"],
+           "Action": ["iam:CreatePolicy", "iam:GetPolicy",
+             "iam:GetPolicyVersion", "iam:ListPolicyVersions",
+             "iam:CreatePolicyVersion", "iam:DeletePolicyVersion"],
            "Resource": "arn:aws:iam::ACCOUNT_ID:policy/GlacierVaultCfnExecScoped"
          },
          {
@@ -301,6 +303,12 @@ Create this as a customer managed policy, then swap it in for
       "Resource": "arn:aws:iam::ACCOUNT_ID:policy/STACK_NAME-*"
     },
     {
+      "Sid": "BootstrapVersionParameter",
+      "Effect": "Allow",
+      "Action": ["ssm:GetParameter", "ssm:GetParameters"],
+      "Resource": "arn:aws:ssm:REGION:ACCOUNT_ID:parameter/cdk-bootstrap/hnb659fds/version"
+    },
+    {
       "Sid": "ReadOnlyDiscovery",
       "Effect": "Allow",
       "Action": [
@@ -319,8 +327,17 @@ setup from the app, it creates the `GlacierVaultCfnExecScoped` policy
 `CreateCfnExecScopedPolicy` statement in step 1) and then runs
 `cdk bootstrap --cloudformation-execution-policies <policy-arn>`, so the
 cfn-exec role never gets `AdministratorAccess`. Re-running setup is safe:
-creating the policy is idempotent, and re-bootstrapping with the flag swaps
-an existing admin attachment for the scoped policy.
+creating the policy is idempotent — if it already exists, the wizard compares
+its document with the expected one and publishes a new version when they
+differ (old non-default versions are pruned; managed policies hold at most
+5) — and re-bootstrapping with the flag swaps an existing admin attachment
+for the scoped policy.
+
+One permission in the scoped policy is easy to miss: `ssm:GetParameters` on
+the bootstrap version parameter. CDK adds a `BootstrapVersion` parameter to
+every stack, resolved from SSM by CloudFormation at changeset creation using
+the execution role — without it, deploy fails with AccessDenied even though
+bootstrap succeeded.
 
 If you ever need to do the swap outside the wizard, the manual commands are
 (run as an admin; replace `ACCOUNT_ID`, `REGION`, and `STACK_NAME` —

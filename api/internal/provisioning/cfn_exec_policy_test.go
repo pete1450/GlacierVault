@@ -31,11 +31,11 @@ func TestCfnExecPolicyDocument(t *testing.T) {
 	if parsed.Version != "2012-10-17" {
 		t.Errorf("unexpected version %q", parsed.Version)
 	}
-	if len(parsed.Statement) != 6 {
-		t.Fatalf("expected 6 statements, got %d", len(parsed.Statement))
+	if len(parsed.Statement) != 7 {
+		t.Fatalf("expected 7 statements, got %d", len(parsed.Statement))
 	}
 
-	wantSids := []string{"StackBuckets", "StackQueue", "StackBatchRole", "StackUser", "StackUserPolicy", "ReadOnlyDiscovery"}
+	wantSids := []string{"StackBuckets", "StackQueue", "StackBatchRole", "StackUser", "StackUserPolicy", "BootstrapVersionParameter", "ReadOnlyDiscovery"}
 	for i, want := range wantSids {
 		if parsed.Statement[i].Sid != want {
 			t.Errorf("statement %d: Sid = %q, want %q", i, parsed.Statement[i].Sid, want)
@@ -53,12 +53,16 @@ func TestCfnExecPolicyDocumentResources(t *testing.T) {
 	parsed := parseCfnExecDoc(t, "788142818300", "us-east-1", "rustic-cold-backups-scoped")
 
 	wantResources := map[string]string{
-		"StackBuckets":      "arn:aws:s3:::rustic-cold-backups-scoped-*",
-		"StackQueue":        "arn:aws:sqs:us-east-1:788142818300:rustic-cold-backups-scoped-*",
-		"StackBatchRole":    "arn:aws:iam::788142818300:role/rustic-cold-backups-scoped-s3batchrole*",
-		"StackUser":         "arn:aws:iam::788142818300:user/rustic-cold-backups-scoped-user*",
-		"StackUserPolicy":   "arn:aws:iam::788142818300:policy/rustic-cold-backups-scoped-*",
-		"ReadOnlyDiscovery": "*",
+		"StackBuckets":    "arn:aws:s3:::rustic-cold-backups-scoped-*",
+		"StackQueue":      "arn:aws:sqs:us-east-1:788142818300:rustic-cold-backups-scoped-*",
+		"StackBatchRole":  "arn:aws:iam::788142818300:role/rustic-cold-backups-scoped-s3batchrole*",
+		"StackUser":       "arn:aws:iam::788142818300:user/rustic-cold-backups-scoped-user*",
+		"StackUserPolicy": "arn:aws:iam::788142818300:policy/rustic-cold-backups-scoped-*",
+		// CDK resolves every stack's BootstrapVersion parameter from SSM at
+		// deploy time using the execution role; without this, changeset
+		// creation fails with AccessDenied on ssm:GetParameters.
+		"BootstrapVersionParameter": "arn:aws:ssm:us-east-1:788142818300:parameter/cdk-bootstrap/hnb659fds/version",
+		"ReadOnlyDiscovery":         "*",
 	}
 	for _, st := range parsed.Statement {
 		want, ok := wantResources[st.Sid]
@@ -123,6 +127,11 @@ func TestCfnExecPolicyDocumentSubstitutesInputs(t *testing.T) {
 		if !strings.Contains(st.Resource, "111122223333") && !strings.HasPrefix(st.Resource, "arn:aws:s3:::") {
 			t.Errorf("statement %s: Resource %q missing account ID", st.Sid, st.Resource)
 		}
+		// The bootstrap version parameter is shared across stacks, so it
+		// carries no stack name — everything else must carry it.
+		if st.Sid == "BootstrapVersionParameter" {
+			continue
+		}
 		if !strings.Contains(st.Resource, "my-stack") {
 			t.Errorf("statement %s: Resource %q missing stack name", st.Sid, st.Resource)
 		}
@@ -171,5 +180,66 @@ func TestBootstrapArgs(t *testing.T) {
 	}
 	if targetIdx != -1 && flagIdx > targetIdx {
 		t.Errorf("execution-policies flag must precede the aws:// target")
+	}
+}
+
+func TestPolicyDocumentsEqual(t *testing.T) {
+	// Same document with keys in a different order and different whitespace:
+	// the stored version was marshalled from a Go map, so key order is
+	// random — this must still count as equal, or every setup re-run would
+	// mint a new policy version for nothing.
+	a := `{"Version": "2012-10-17", "Statement": [{"Sid": "A", "Effect": "Allow", "Action": ["s3:GetObject"], "Resource": "arn:aws:s3:::b/*"}]}`
+	b := "{\"Statement\": [{\"Resource\": \"arn:aws:s3:::b/*\", \"Action\": [\"s3:GetObject\"], \"Effect\": \"Allow\", \"Sid\": \"A\"}], \"Version\": \"2012-10-17\"}"
+	equal, err := policyDocumentsEqual(a, b)
+	if err != nil {
+		t.Fatalf("policyDocumentsEqual returned error: %v", err)
+	}
+	if !equal {
+		t.Errorf("documents with reordered keys should be equal")
+	}
+
+	// A real difference must not compare equal.
+	c := `{"Version": "2012-10-17", "Statement": [{"Sid": "A", "Effect": "Allow", "Action": ["s3:PutObject"], "Resource": "arn:aws:s3:::b/*"}]}`
+	equal, err = policyDocumentsEqual(a, c)
+	if err != nil {
+		t.Fatalf("policyDocumentsEqual returned error: %v", err)
+	}
+	if equal {
+		t.Errorf("documents with different actions should not be equal")
+	}
+
+	// Invalid JSON must error, not silently compare unequal.
+	if _, err := policyDocumentsEqual(a, "{not json"); err == nil {
+		t.Errorf("expected error for invalid JSON, got nil")
+	}
+}
+
+func TestCfnExecPolicyDocumentIncludesBootstrapVersion(t *testing.T) {
+	// Regression test for the deploy failure: CloudFormation resolves the
+	// BootstrapVersion SSM parameter at changeset creation using the
+	// execution role, so the scoped policy must allow ssm:GetParameters
+	// on the bootstrap version parameter.
+	parsed := parseCfnExecDoc(t, "788142818300", "us-east-1", "rustic-cold-backups-scoped")
+	found := false
+	for _, st := range parsed.Statement {
+		if st.Sid != "BootstrapVersionParameter" {
+			continue
+		}
+		found = true
+		wantActions := map[string]bool{"ssm:GetParameter": false, "ssm:GetParameters": false}
+		for _, a := range st.Action {
+			if _, ok := wantActions[a]; !ok {
+				t.Errorf("BootstrapVersionParameter: unexpected action %q", a)
+			}
+			wantActions[a] = true
+		}
+		for a, seen := range wantActions {
+			if !seen {
+				t.Errorf("BootstrapVersionParameter: missing action %q", a)
+			}
+		}
+	}
+	if !found {
+		t.Errorf("policy document is missing the BootstrapVersionParameter statement")
 	}
 }
